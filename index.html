@@ -267,7 +267,7 @@ function applyStyle() {
 }
 const COLOR_NAMES = { teal: 'Teal', indigo: 'Indigo', pink: 'Pink', orange: 'Orange', blue: 'Blue', green: 'Green', amber: 'Amber', slate: 'Slate' };
 // Canvas layout, in CSS pixels
-const PADX = 16, PADY = 14, GAP = 6, HEAD = 26, STEM = 18, TRACK_FOOT = 10, AXIS = 36, EV_LANE = 28, BAND_LANE = 30;
+const PADX = 16, PADY = 14, GAP = 6, ROW_GAP = 8, HEAD = 26, STEM = 18, TRACK_FOOT = 10, AXIS = 36, EV_LANE = 28, BAND_LANE = 30;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -650,8 +650,9 @@ function autoTrackH(tr) {
   const n = Math.max(1, mine('tracks').length);
   const tall = Math.round((innerHeight - 340) / n) - HEAD - STEM - TRACK_FOOT;
   const ps = mine('photos').filter(p => trackOf(p) === tr);
-  const wide = ps.length ? (fitW - 2 * PADX - GAP * ps.length) / ps.reduce((a, p) => a + aspect(p), 0) : Infinity;
-  return Math.round(clamp(Math.min(tall, wide), 56, 150));
+  const rows = tr.overlap === 'stack' ? tr.rows || 3 : 1;   // stacked rows share out the crowd, so photos can stay bigger
+  const wide = ps.length ? (rows * (fitW - 2 * PADX) - GAP * ps.length) / ps.reduce((a, p) => a + aspect(p), 0) : Infinity;
+  return Math.round(clamp(Math.min(rows > 1 ? tall * 0.75 : tall, wide), 56, 150));
 }
 const trackH = tr => tr.height || autoTrackH(tr);
 const aspect = p => clamp((p.w || 4) / (p.h || 3), 0.5, 2.2);
@@ -677,6 +678,25 @@ function spread(items) {
     groups.push(g);
   }
   for (const g of groups) { const left = g.q / g.items.length; for (const it of g.items) it.left = left + it.off; }
+}
+
+/* Stacks photos in rows above the track's line: each takes the lowest row where it fits at its date, and when
+   every row is full it joins the row that ends soonest; each row is then spread like a single row. Returns the
+   rows used. */
+function stack(items, max) {
+  const ends = [], rows = [];
+  for (const it of items) {
+    const left = it.ax - it.w / 2;
+    let r = ends.findIndex(e => e + GAP <= left);
+    if (r < 0 && ends.length < max) r = ends.length;
+    if (r < 0) r = ends.indexOf(Math.min(...ends));
+    if (r === ends.length) { ends.push(-Infinity); rows.push([]); }
+    it.row = r;
+    rows[r].push(it);
+    ends[r] = Math.max(ends[r] + GAP, left) + it.w;
+  }
+  rows.forEach(spread);
+  return Math.max(1, rows.length);
 }
 
 function layout(viewW, frozen, shift = 0) {
@@ -739,13 +759,17 @@ function layout(viewW, frozen, shift = 0) {
   L.tracksTop = y;
   for (const tr of tracks) {
     const h = trackH(tr);
-    const T = { tr, y, h, photoTop: y + HEAD, base: y + HEAD + h + STEM };
-    T.bottom = T.base + TRACK_FOOT;
+    const T = { tr, y, h };
     const ps = photos.filter(p => trackOf(p) === tr)
-      .map(p => ({ p, T, ax: xOf(parseLocal(p.t)), w: Math.round(h * aspect(p)), h, top: T.photoTop }))
+      .map(p => ({ p, T, ax: xOf(parseLocal(p.t)), w: Math.round(h * aspect(p)), h, row: 0 }))
       .sort((a, b) => a.ax - b.ax || (a.p.id < b.p.id ? -1 : 1));
+    let rows = 1;
     if (tr.overlap === 'overlap') ps.forEach(it => { it.left = it.ax - it.w / 2; });
+    else if (tr.overlap === 'stack') rows = stack(ps, tr.rows || 3);
     else spread(ps);
+    T.base = y + HEAD + rows * h + (rows - 1) * ROW_GAP + STEM;
+    T.bottom = T.base + TRACK_FOOT;
+    for (const it of ps) it.top = T.base - STEM - h - it.row * (h + ROW_GAP);   // row 0 sits nearest the line
     for (const it of ps) { minX = Math.min(minX, it.left, it.ax); maxX = Math.max(maxX, it.left + it.w); L.photos.push(it); }
     L.tracks.push(T);
     y = T.bottom;
@@ -1444,7 +1468,8 @@ function openEditor(s) {
       <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
       <label class="cb"><input type="checkbox" id="fAuto"${auto ? ' checked' : ''}> Size photos to fit the screen</label>
       <label class="field">Photo height <span class="mono" id="fHval">${trackH(r)} px</span><input type="range" id="fH" min="48" max="360" step="4" value="${trackH(r)}"${auto ? ' disabled' : ''}></label>
-      <label class="field">When photos overlap<select id="fOverlap"><option value="spread"${r.overlap !== 'overlap' ? ' selected' : ''}>Spread them out</option><option value="overlap"${r.overlap === 'overlap' ? ' selected' : ''}>Let them overlap</option></select></label>
+      <label class="field">When photos overlap<select id="fOverlap"><option value="spread"${r.overlap !== 'overlap' ? ' selected' : ''}>Spread them out</option><option value="stack"${r.overlap === 'stack' ? ' selected' : ''}>Stack them in rows</option><option value="overlap"${r.overlap === 'overlap' ? ' selected' : ''}>Let them overlap</option></select></label>
+      <label class="field" id="fRowsF"${r.overlap === 'stack' ? '' : ' hidden'}>Up to <span class="mono" id="fRowsV">${r.rows || 3} rows</span><input type="range" id="fRows" min="2" max="6" step="1" value="${r.rows || 3}"></label>
       <div class="row"><button class="btn sm" type="button" id="fUp"${i === 0 ? ' disabled' : ''}>Move up</button><button class="btn sm" type="button" id="fDown"${i === ts.length - 1 ? ' disabled' : ''}>Move down</button></div>
       <div class="row">${ts.length > 1 ? `<button class="btn danger" type="button" id="fDel">Delete</button>` : ''}<span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>
       ${ts.length > 1 && n ? `<p class="note">Deleting this track deletes its ${n} photo${n === 1 ? '' : 's'} too.</p>` : ''}`, f => {
@@ -1454,6 +1479,8 @@ function openEditor(s) {
       f.querySelector('#fAuto').onchange = e => { r.height = e.target.checked ? null : +range.value; range.disabled = e.target.checked; val.textContent = trackH(r) + ' px'; range.value = trackH(r); touchRec(r); changed(); };
       range.oninput = () => { r.height = +range.value; val.textContent = r.height + ' px'; touchRec(r); changed(); };
       bind(f, '#fOverlap', r, 'overlap');
+      f.querySelector('#fOverlap').addEventListener('change', e => { f.querySelector('#fRowsF').hidden = e.target.value !== 'stack'; val.textContent = trackH(r) + ' px'; range.value = trackH(r); });
+      f.querySelector('#fRows').oninput = e => { r.rows = +e.target.value; f.querySelector('#fRowsV').textContent = r.rows + ' rows'; val.textContent = trackH(r) + ' px'; range.value = trackH(r); touchRec(r); changed(); };
       const swap = d => { const o = ts[i + d]; [r.order, o.order] = [o.order, r.order]; if (r.order === o.order) r.order += d; touchRec(r); touchRec(o); changed(); openEditor(s); };
       f.querySelector('#fUp').onclick = () => swap(-1);
       f.querySelector('#fDown').onclick = () => swap(1);
