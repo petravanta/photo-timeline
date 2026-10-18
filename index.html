@@ -650,7 +650,7 @@ function autoTrackH(tr) {
   const n = Math.max(1, mine('tracks').length);
   const tall = Math.round((innerHeight - 340) / n) - HEAD - STEM - TRACK_FOOT;
   const ps = mine('photos').filter(p => trackOf(p) === tr);
-  const rows = tr.overlap === 'stack' ? tr.rows || 3 : 1;   // stacked rows share out the crowd, so photos can stay bigger
+  const rows = tr.overlap === 'stack' || tr.overlap === 'both' ? tr.rows || 3 : 1;   // stacked rows share out the crowd, so photos can stay bigger
   const wide = ps.length ? (rows * (fitW - 2 * PADX) - GAP * ps.length) / ps.reduce((a, p) => a + aspect(p), 0) : Infinity;
   return Math.round(clamp(Math.min(rows > 1 ? tall * 0.75 : tall, wide), 56, 150));
 }
@@ -680,14 +680,14 @@ function spread(items) {
   for (const g of groups) { const left = g.q / g.items.length; for (const it of g.items) it.left = left + it.off; }
 }
 
-/* Stacks photos in rows above the track's line: each takes the lowest row where it fits at its date, and when
-   every row is full it joins the row that ends soonest; each row is then spread like a single row. Returns the
-   rows used. */
-function stack(items, max) {
+/* Stacks photos in rows above the track's line: each takes the lowest row where it fits at its date, or within
+   a nudge of `give` times its width, and when every row is full it joins the row that ends soonest; each row is
+   then spread like a single row. Returns the rows used. */
+function stack(items, max, give = 0) {
   const ends = [], rows = [];
   for (const it of items) {
     const left = it.ax - it.w / 2;
-    let r = ends.findIndex(e => e + GAP <= left);
+    let r = ends.findIndex(e => e + GAP <= left + it.w * give);
     if (r < 0 && ends.length < max) r = ends.length;
     if (r < 0) r = ends.indexOf(Math.min(...ends));
     if (r === ends.length) { ends.push(-Infinity); rows.push([]); }
@@ -766,6 +766,7 @@ function layout(viewW, frozen, shift = 0) {
     let rows = 1;
     if (tr.overlap === 'overlap') ps.forEach(it => { it.left = it.ax - it.w / 2; });
     else if (tr.overlap === 'stack') rows = stack(ps, tr.rows || 3);
+    else if (tr.overlap === 'both') rows = stack(ps, tr.rows || 3, 0.5);   // nudge up to half a photo before opening a row
     else spread(ps);
     T.base = y + HEAD + rows * h + (rows - 1) * ROW_GAP + STEM;
     T.bottom = T.base + TRACK_FOOT;
@@ -1468,8 +1469,8 @@ function openEditor(s) {
       <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
       <label class="cb"><input type="checkbox" id="fAuto"${auto ? ' checked' : ''}> Size photos to fit the screen</label>
       <label class="field">Photo height <span class="mono" id="fHval">${trackH(r)} px</span><input type="range" id="fH" min="48" max="360" step="4" value="${trackH(r)}"${auto ? ' disabled' : ''}></label>
-      <label class="field">When photos overlap<select id="fOverlap"><option value="spread"${r.overlap !== 'overlap' ? ' selected' : ''}>Spread them out</option><option value="stack"${r.overlap === 'stack' ? ' selected' : ''}>Stack them in rows</option><option value="overlap"${r.overlap === 'overlap' ? ' selected' : ''}>Let them overlap</option></select></label>
-      <label class="field" id="fRowsF"${r.overlap === 'stack' ? '' : ' hidden'}>Up to <span class="mono" id="fRowsV">${r.rows || 3} rows</span><input type="range" id="fRows" min="2" max="6" step="1" value="${r.rows || 3}"></label>
+      <label class="field">When photos overlap<select id="fOverlap"><option value="spread"${(r.overlap || 'spread') === 'spread' ? ' selected' : ''}>Spread them out</option><option value="both"${r.overlap === 'both' ? ' selected' : ''}>Nudge a little, stack when crowded</option><option value="stack"${r.overlap === 'stack' ? ' selected' : ''}>Stack them in rows</option><option value="overlap"${r.overlap === 'overlap' ? ' selected' : ''}>Let them overlap</option></select></label>
+      <label class="field" id="fRowsF"${r.overlap === 'stack' || r.overlap === 'both' ? '' : ' hidden'}>Up to <span class="mono" id="fRowsV">${r.rows || 3} rows</span><input type="range" id="fRows" min="2" max="6" step="1" value="${r.rows || 3}"></label>
       <div class="row"><button class="btn sm" type="button" id="fUp"${i === 0 ? ' disabled' : ''}>Move up</button><button class="btn sm" type="button" id="fDown"${i === ts.length - 1 ? ' disabled' : ''}>Move down</button></div>
       <div class="row">${ts.length > 1 ? `<button class="btn danger" type="button" id="fDel">Delete</button>` : ''}<span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>
       ${ts.length > 1 && n ? `<p class="note">Deleting this track deletes its ${n} photo${n === 1 ? '' : 's'} too.</p>` : ''}`, f => {
@@ -1479,7 +1480,7 @@ function openEditor(s) {
       f.querySelector('#fAuto').onchange = e => { r.height = e.target.checked ? null : +range.value; range.disabled = e.target.checked; val.textContent = trackH(r) + ' px'; range.value = trackH(r); touchRec(r); changed(); };
       range.oninput = () => { r.height = +range.value; val.textContent = r.height + ' px'; touchRec(r); changed(); };
       bind(f, '#fOverlap', r, 'overlap');
-      f.querySelector('#fOverlap').addEventListener('change', e => { f.querySelector('#fRowsF').hidden = e.target.value !== 'stack'; val.textContent = trackH(r) + ' px'; range.value = trackH(r); });
+      f.querySelector('#fOverlap').addEventListener('change', e => { f.querySelector('#fRowsF').hidden = !['stack', 'both'].includes(e.target.value); val.textContent = trackH(r) + ' px'; range.value = trackH(r); });
       f.querySelector('#fRows').oninput = e => { r.rows = +e.target.value; f.querySelector('#fRowsV').textContent = r.rows + ' rows'; val.textContent = trackH(r) + ' px'; range.value = trackH(r); touchRec(r); changed(); };
       const swap = d => { const o = ts[i + d]; [r.order, o.order] = [o.order, r.order]; if (r.order === o.order) r.order += d; touchRec(r); touchRec(o); changed(); openEditor(s); };
       f.querySelector('#fUp').onclick = () => swap(-1);
