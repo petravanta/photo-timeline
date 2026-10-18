@@ -788,6 +788,7 @@ function layout(viewW, frozen, shift = 0) {
 
   let y = PADY, minX = Infinity, maxX = xOf(hi) + edge;
   if (S.showName && S.name) { L.titleY = y + 20; y += 40; }
+  L.bodyTop = y;
 
   measure.font = font(600, 12);
   if (events.length) {
@@ -953,7 +954,7 @@ const isSel = (kind, id) => (sel && sel.kind === kind && sel.id === id) || (kind
 function draw(ctx, L, o) {
   const k = o.k, S = cur(), st = look(), x0 = o.ox, x1 = o.ox + o.vw;
   const vis = (l, r) => r >= x0 - 4 && l <= x1 + 4;
-  const stickyX = o.screen ? x0 + PADX : PADX;
+  const stickyX = o.screen || o.sticky ? x0 + PADX : PADX;   // sticky: names at the left of each slice of a split image
   ctx.save();
   ctx.fillStyle = k.surface;
   ctx.fillRect(0, 0, o.vw, L.H);
@@ -1036,7 +1037,7 @@ function draw(ctx, L, o) {
     if (o.screen && isSel('band', it.b.id)) { ctx.strokeStyle = k.ink; ctx.lineWidth = 2; rr(ctx, it.left - 2, it.y - 2, w + 4, it.h + 4, 7); ctx.stroke(); ctx.lineWidth = 1; }
     ctx.font = font(600, 12); ctx.fillStyle = k.ink;
     let lx = it.left + 11;
-    if (o.screen && lx < stickyX && it.right - it.labelW > stickyX) lx = stickyX;   // keep the label in view
+    if ((o.screen || o.sticky) && lx < stickyX && it.right - it.labelW > stickyX) lx = stickyX;   // keep the label in view
     ctx.fillText(bandLabel(it.b), lx, it.y + it.h / 2 + 4);
   }
   // Events: a flag with a dashed line down to the axis, under the photos
@@ -1814,23 +1815,36 @@ $('#backupIn').onchange = async e => {
 };
 
 /* ---------- Save as image ---------- */
+/* Wide saves the timeline as one long strip. The other shapes cut it at gaps between photos, then either stack
+   the pieces as rows of one image or make one image per piece, numbered for a gallery post. */
+const SHAPES = { wide: null, square: 1, portrait: 0.8, story: 0.5625 };
 $('#exportBtn').onclick = () => {
   if ($('#tlPanel').hidden) return toast('Add some photos first.');
   const canShare = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([''], 'x.png', { type: 'image/png' })] }));
-  const opt = { width: 'screen', scale: 2, theme: 'light' };
+  const opt = { width: 'screen', scale: 2, theme: 'light', shape: 'wide', pages: 'one' };
   try { Object.assign(opt, JSON.parse(localStorage.getItem('photoTimeline.export')) || {}); } catch (e) {}
   const segBtns = (key, vals) => `<div class="seg" role="group">${vals.map(([v, l]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(opt[key]) === String(v)}">${l}</button>`).join('')}</div>`;
   openDrawer('Save as image', `
+    <div class="field">Shape${segBtns('shape', [['wide', 'Wide strip'], ['square', 'Square'], ['portrait', '4:5'], ['story', '9:16']])}</div>
+    <div class="field" id="ePagesF">Split into${segBtns('pages', [['one', 'Rows in one image'], ['many', 'Separate images']])}</div>
     <div class="field">Width${segBtns('width', [['screen', 'As on screen'], [1200, '1200'], [1800, '1800'], [2600, '2600']])}</div>
     <div class="field">Sharpness${segBtns('scale', [[1, '1×'], [2, '2×'], [3, '3×']])}</div>
     <div class="field">Colors${segBtns('theme', [['light', 'Light'], ['dark', 'Dark'], ['current', 'As on screen']])}</div>
     <p class="note" id="eSize"></p>
     <div class="row"><button class="btn primary" type="button" id="eSave">Download PNG</button>${canShare ? '<button class="btn" type="button" id="eShare">Share…</button>' : ''}</div>
-    <figure id="eOut" hidden style="margin:0;display:flex;flex-direction:column;gap:6px"><img class="preview" alt="The saved timeline image"><figcaption class="note">If the download doesn’t start, right-click or long-press the image to save it.</figcaption></figure>`, f => {
-    const show = b => { const out = f.querySelector('#eOut'), img = out.querySelector('img'); if (img.src) URL.revokeObjectURL(img.src); img.src = URL.createObjectURL(b); out.hidden = false; };
+    <figure id="eOut" hidden style="margin:0;display:flex;flex-direction:column;gap:6px"><div id="eImgs" style="display:flex;flex-direction:column;gap:8px"></div><figcaption class="note">If the download doesn’t start, right-click or long-press the image to save it.</figcaption></figure>`, f => {
+    const show = bs => {
+      const box = f.querySelector('#eImgs');
+      box.querySelectorAll('img').forEach(i => URL.revokeObjectURL(i.src));
+      box.innerHTML = bs.map((b, i) => `<img class="preview" alt="Saved image ${i + 1} of ${bs.length}">`).join('');
+      box.querySelectorAll('img').forEach((i, n) => { i.src = URL.createObjectURL(bs[n]); });
+      f.querySelector('#eOut').hidden = false;
+    };
     const update = () => {
-      const r = exportPlan(opt);
-      f.querySelector('#eSize').textContent = `${r.pw} × ${r.ph} pixels${r.scale < opt.scale ? ' (reduced to fit the largest image this browser can make)' : ''}.`;
+      f.querySelector('#ePagesF').hidden = !SHAPES[opt.shape];
+      const r = exportPlan(opt), pg = r.pages[0], n = r.pages.length;
+      f.querySelector('#eSize').textContent = `${n > 1 ? n + ' images, each ' : ''}${Math.round(pg.w * r.scale)} × ${Math.round(pg.h * r.scale)} pixels${r.scale < opt.scale ? ' (reduced to fit the largest image this browser can make)' : ''}.`;
+      f.querySelector('#eSave').textContent = n > 1 ? `Download ${n} PNGs` : 'Download PNG';
     };
     f.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
       opt[b.dataset.k] = isNaN(+b.dataset.v) ? b.dataset.v : +b.dataset.v;
@@ -1839,46 +1853,111 @@ $('#exportBtn').onclick = () => {
       update();
     });
     update();
-    const name = () => `${(cur().name || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline'}.png`;
-    f.querySelector('#eSave').onclick = async () => { const b = await renderImage(opt); if (b) { show(b); download(b, name()); toast('Image saved'); } };
+    const base = (cur().name || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline';
+    const name = (i, n) => n > 1 ? `${base} ${i + 1} of ${n}.png` : `${base}.png`;
+    f.querySelector('#eSave').onclick = async () => {
+      const bs = await renderImages(opt);
+      if (!bs) return;
+      show(bs);
+      for (const [i, b] of bs.entries()) { download(b, name(i, bs.length)); if (bs.length > 1) await new Promise(r => setTimeout(r, 400)); }
+      toast(bs.length > 1 ? `${bs.length} images saved` : 'Image saved');
+    };
     if (canShare) f.querySelector('#eShare').onclick = async () => {
-      const b = await renderImage(opt);
-      if (!b) return;
-      show(b);
-      try { await navigator.share({ files: [new File([b], name(), { type: 'image/png' })], title: cur().name || 'Photo timeline' }); }
-      catch (err) { if (err.name !== 'AbortError') download(b, name()); }
+      const bs = await renderImages(opt);
+      if (!bs) return;
+      show(bs);
+      try { await navigator.share({ files: bs.map((b, i) => new File([b], name(i, bs.length), { type: 'image/png' })), title: cur().name || 'Photo timeline' }); }
+      catch (err) { if (err.name !== 'AbortError') bs.forEach((b, i) => download(b, name(i, bs.length))); }
     };
   });
 };
 const CREDIT = 'Generated with https://petravanta.github.io/photo-timeline/', CREDIT_H = 18;
-function exportPlan(opt) {
-  const L2 = layout(opt.width === 'screen' ? sc.clientWidth : opt.width, null);
-  if (cur().credit !== false) L2.H += CREDIT_H;   // room for the footer credit, which is on unless switched off
-  // Keep under the largest canvas phones can make (16.7 million pixels on iOS) and 16384 pixels a side
-  const scale = Math.min(opt.scale, 16384 / L2.W, 16384 / L2.H, Math.sqrt(16.7e6 / (L2.W * L2.H)));
-  return { L: L2, scale, pw: Math.round(L2.W * scale), ph: Math.round(L2.H * scale) };
+
+// Where to cut the timeline into n pieces: each near an even share of what's left, at a spot no photo or event
+// flag covers, so nothing is sliced in half unless there's no gap anywhere near
+function cutPoints(L, n) {
+  const busy = [...L.photos.map(it => [it.left - GAP / 2, it.left + it.w + GAP / 2]), ...L.events.map(it => [it.x - 8, it.x + it.w + 2])];
+  const free = x => !busy.some(([a, b]) => x > a && x < b);
+  const cuts = [0];
+  cuts.through = 0;   // how many cuts had to go through something
+  for (let i = 1; i < n; i++) {
+    const prev = cuts[i - 1], share = (L.W - prev) / (n - i + 1), want = prev + share;
+    let best = null;
+    for (let d = 0; d <= share * 0.45; d += 2) { if (free(want - d)) { best = want - d; break; } if (free(want + d)) { best = want + d; break; } }
+    if (best === null) { best = want; cuts.through++; }
+    cuts.push(Math.max(prev + 40, Math.round(best)));
+  }
+  cuts.push(L.W);
+  return cuts;
 }
-async function renderImage(opt) {
+/* Pages to draw: each page has a size and the slices (rows) drawn on it, already scaled to fit */
+function exportPlan(opt) {
+  const credit = cur().credit !== false, a = SHAPES[opt.shape];
+  let pages;
+  if (!a) {
+    const L2 = layout(opt.width === 'screen' ? sc.clientWidth : opt.width, null), h = L2.H + (credit ? CREDIT_H : 0);
+    pages = [{ w: L2.W, h, L: L2, rows: [{ ox: 0, vw: L2.W, y: 0, top: 0, h: L2.H }], f: 1, dx: 0, dy: 0 }];
+  } else {
+    // Try the timeline at a few lengths, cut into 1 to 12 pieces, and keep what fills the shape best (fewer pieces
+    // when it's close)
+    const outW = opt.width === 'screen' ? 1080 : opt.width, outH = Math.round(outW / a), many = opt.pages === 'many';
+    const room = outH - (credit ? CREDIT_H : 0), pad = 16;
+    let best = null;
+    for (const m of [1, 1.5, 2, 3, 4, 6, 8]) for (let n = 1, L2 = layout(900 * m, null); n <= Math.min(12, Math.ceil(L2.W / 280)); n++) {
+      const cuts = cutPoints(L2, n);
+      const sl = cuts.slice(0, -1).map((x, i) => ({ ox: x, vw: cuts[i + 1] - x }));
+      const restH = L2.H - (L2.bodyTop - PADY);   // later rows leave out the title
+      const groups = many ? sl.map((s, i) => [{ ...s, top: 0, h: L2.H }])
+        : [sl.map((s, i) => ({ ...s, top: i ? L2.bodyTop - PADY : 0, h: i ? restH : L2.H }))];
+      const pg = groups.map(rows => {
+        let y = 0;
+        rows.forEach(r => { r.y = y; y += r.h + 10; });
+        const cw = Math.max(...rows.map(r => r.vw)), ch = y - 10, f = Math.min((outW - 2 * pad) / cw, (room - 2 * pad) / ch, 1.25 * outW / 1080);   // grow a little at most, so text stays in proportion
+        return { w: outW, h: outH, L: L2, rows, f, dx: (outW - cw * f) / 2, dy: (room - ch * f) / 2, fill: (cw * ch * f * f) / (outW * room) };
+      });
+      const score = Math.min(...pg.map(p => p.fill)) - n * 0.015 - m * 0.01 - cuts.through * 0.5
+        - Math.max(0, 0.8 * outW / 1080 - Math.min(...pg.map(p => p.f))) * 0.6;   // and text that stays readable
+      if (!best || score > best.score) best = { score, pages: pg };
+    }
+    pages = best.pages;
+  }
+  const { w, h } = pages[0];
+  // Keep under the largest canvas phones can make (16.7 million pixels on iOS) and 16384 pixels a side
+  const scale = Math.min(opt.scale, 16384 / w, 16384 / h, Math.sqrt(16.7e6 / (w * h)));
+  return { pages, scale };
+}
+async function renderImages(opt) {
   toast('Drawing image…', 60000);
   try {
     await document.fonts.ready;
     const images = new Map();
     await Promise.all(mine('photos').map(p => loadImg(p.id).then(img => images.set(p.id, img), () => {})));
-    const { L: L2, scale, pw, ph } = exportPlan(opt);
-    const c = document.createElement('canvas');
-    c.width = pw; c.height = ph;
-    const ctx = c.getContext('2d');
-    ctx.scale(scale, scale);
-    const k = tokensFor(opt.theme);
-    draw(ctx, L2, { k, ox: 0, vw: L2.W, screen: false, images });
-    if (cur().credit !== false) {
-      ctx.font = font(500, 11); ctx.fillStyle = k.muted; ctx.textAlign = 'right';
-      ctx.fillText(CREDIT, L2.W - PADX, L2.H - 10);
+    const { pages, scale } = exportPlan(opt), k = tokensFor(opt.theme), out = [];
+    for (const pg of pages) {
+      const c = document.createElement('canvas');
+      c.width = Math.round(pg.w * scale); c.height = Math.round(pg.h * scale);
+      const ctx = c.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.fillStyle = k.surface; ctx.fillRect(0, 0, pg.w, pg.h);
+      for (const [i, r] of pg.rows.entries()) {
+        ctx.save();
+        ctx.translate(pg.dx, pg.dy); ctx.scale(pg.f, pg.f); ctx.translate(0, r.y);
+        if (i) { ctx.strokeStyle = k.line; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(r.vw, -5); ctx.stroke(); }
+        ctx.beginPath(); ctx.rect(0, 0, r.vw, r.h); ctx.clip();
+        ctx.translate(0, -r.top);
+        draw(ctx, pg.L, { k, ox: r.ox, vw: r.vw, screen: false, sticky: pg.rows.length > 1 || pages.length > 1, images });
+        ctx.restore();
+      }
+      if (cur().credit !== false) {
+        ctx.font = font(500, 11); ctx.fillStyle = k.muted; ctx.textAlign = 'right';
+        ctx.fillText(pages.length > 1 ? `${out.length + 1}/${pages.length} · ${CREDIT}` : CREDIT, pg.w - PADX, pg.h - 10);
+      }
+      const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+      if (!blob) throw new Error('encode');
+      out.push(blob);
     }
-    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
-    if (!blob) throw new Error('encode');
     toast('', 0);
-    return blob;
+    return out;
   } catch (e) { toast('Couldn’t make the image. Try a smaller width or sharpness.'); return null; }
 }
 
