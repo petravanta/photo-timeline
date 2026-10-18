@@ -1,0 +1,1336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Photo Timeline</title>
+<meta name="description" content="Lay photos out on a timeline by the date they were taken, mark periods with bands and special days with event markers, and save it as an image.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#172129" media="(prefers-color-scheme: dark)">
+<script>try{var t=localStorage.getItem('petravanta.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* ===== Shared look: petravanta's apps =====
+   Canonical copy of the tokens, type and components used by Fitness Coach and Skating Mentor (and this hub).
+   Apps currently inline this block between "Shared look" and "end shared look"; update both when it changes.
+   Each app only overrides the --accent values after this block. */
+:root{
+  --bg:#eef2f4; --surface:#ffffff; --sunk:#e3e9ec; --line:#cdd6db; --ink:#14212a; --muted:#566771; --faint:#8a99a2;
+  --lv-new:#9aa8b0; --lv-learn:#c07a00; --lv-dev:#2f6fd0; --lv-conf:#11897a; --lv-solid:#0c5e3e;
+  --lv-learn-bg:#fbefd9; --lv-dev-bg:#e1ebfa; --lv-conf-bg:#d9f1ec; --lv-solid-bg:#d5eadf;
+  --danger:#b3261e; --danger-soft:#fbe3e1;
+  --f-display:"Unbounded","Arial Rounded MT Bold",system-ui,sans-serif;
+  --f-body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f161b; --surface:#172129; --sunk:#111a20; --line:#2a3842; --ink:#e4ecf0; --muted:#9fb0ba; --faint:#6b7d88;
+  --lv-new:#64757f; --lv-learn:#e6a33a; --lv-dev:#6ea0f0; --lv-conf:#3cc3ad; --lv-solid:#6fd39a;
+  --lv-learn-bg:#3a2a10; --lv-dev-bg:#182a45; --lv-conf-bg:#0f3530; --lv-solid-bg:#143224;
+  --danger:#ff8a80; --danger-soft:#3d1c1a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f161b; --surface:#172129; --sunk:#111a20; --line:#2a3842; --ink:#e4ecf0; --muted:#9fb0ba; --faint:#6b7d88;
+  --lv-new:#64757f; --lv-learn:#e6a33a; --lv-dev:#6ea0f0; --lv-conf:#3cc3ad; --lv-solid:#6fd39a;
+  --lv-learn-bg:#3a2a10; --lv-dev-bg:#182a45; --lv-conf-bg:#0f3530; --lv-solid-bg:#143224;
+  --danger:#ff8a80; --danger-soft:#3d1c1a; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--surface)}
+[hidden]{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
+.topbar{display:flex;align-items:center;gap:16px;padding-block:12px 0;flex-wrap:wrap}
+.brand{font-family:var(--f-display);font-weight:700;font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.brand svg{width:26px;height:26px;flex:none}
+.save-state{margin-left:auto;font-size:12px;color:var(--muted);font-family:var(--f-mono)}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;padding-top:8px;scrollbar-width:none}
+nav.tabs button{background:none;border:0;border-bottom:3px solid transparent;padding:8px 12px 9px;font-weight:600;color:var(--muted);white-space:nowrap}
+nav.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+main{padding-block:20px 80px}
+h2{font-family:var(--f-display);font-weight:500;font-size:20px;letter-spacing:-.01em;margin:0;text-wrap:balance}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0;font-weight:600}
+p{margin:0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.stack{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-weight:600;font-size:14px}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.ghost{background:none}
+.btn.danger{color:var(--danger)}
+.btn.sm{padding:4px 10px;font-size:13px}
+.btn.big{padding:12px 22px;font-size:16px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;color:var(--muted)}
+.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+label.field{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+select,input[type=text],input[type=number],textarea{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:15px;text-transform:none;letter-spacing:0;font-weight:500;min-width:0}
+textarea{resize:vertical}
+.ctx{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end}
+@media (max-width:720px){.ctx{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ctx-note{font-size:13px;color:var(--muted);margin-top:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap;background:var(--sunk);color:var(--muted)}
+.pill.l1{background:var(--lv-learn-bg);color:var(--lv-learn)}
+.pill.l2{background:var(--lv-dev-bg);color:var(--lv-dev)}
+.pill.l3{background:var(--lv-conf-bg);color:var(--lv-conf)}
+.pill.l4{background:var(--lv-solid-bg);color:var(--lv-solid)}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:720px){.two{grid-template-columns:minmax(0,1fr)}}
+.banner{background:var(--accent-soft);border-radius:var(--r);padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.banner p{flex:1 1 260px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:620px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stat b{display:block;font-family:var(--f-mono);font-size:24px;font-weight:500}
+.stat span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.meter{height:8px;border-radius:4px;background:var(--sunk);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:4px;background:var(--accent)}
+.scrim{position:fixed;inset:0;background:rgba(10,16,20,.35);z-index:40}
+.drawer{position:fixed;z-index:41;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--surface);border-left:1px solid var(--line);overflow-y:auto;
+  padding:calc(env(safe-area-inset-top,0px) + 18px) max(18px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 24px) 18px;display:flex;flex-direction:column;gap:16px}
+@media (max-width:640px){.drawer{top:auto;left:0;width:100%;max-height:86vh;border-left:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;padding-left:max(18px,env(safe-area-inset-left,0px))}}
+.drawer .x{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);right:max(12px,env(safe-area-inset-right,0px));background:var(--sunk);border:0;border-radius:999px;width:32px;height:32px;font-size:18px;line-height:1}
+@media (max-width:640px){.drawer .x{top:12px}}
+.drawer h2{padding-right:40px}
+.drawer ul,.cues{margin:0;padding-left:18px}
+.checks{display:flex;flex-wrap:wrap;gap:6px}
+.checks label{display:inline-flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;background:var(--sunk)}
+.entry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-top:1px solid var(--line)}
+.entry .meta{font-size:12px;color:var(--muted)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:14px;font-weight:600;z-index:60;max-width:calc(100% - 32px)}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){.drawer{animation:slide .18s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:.4}}}
+/* ===== end shared look ===== */
+/* Photo Timeline accent: violet */
+:root{--accent:#7442b8;--accent-ink:#ffffff;--accent-soft:#efe6fa}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--accent:#bb94ff;--accent-ink:#1d0d38;--accent-soft:#2a1d40}}
+:root[data-theme="dark"]{--accent:#bb94ff;--accent-ink:#1d0d38;--accent-soft:#2a1d40}
+
+/* Colors people pick for tracks, bands and events. Each has 4.5:1 or better against --surface in its theme. */
+:root{--c-teal:#0e7c6f;--c-indigo:#4f46c8;--c-pink:#c2306f;--c-orange:#c2410c;--c-blue:#1d6fb8;--c-green:#2e7d32;--c-amber:#9a6200;--c-slate:#566771}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--c-teal:#3cc3ad;--c-indigo:#9d95ff;--c-pink:#f0679f;--c-orange:#fb8a4c;--c-blue:#6cb4ff;--c-green:#6fd39a;--c-amber:#e6a33a;--c-slate:#9fb0ba}}
+:root[data-theme="dark"]{--c-teal:#3cc3ad;--c-indigo:#9d95ff;--c-pink:#f0679f;--c-orange:#fb8a4c;--c-blue:#6cb4ff;--c-green:#6fd39a;--c-amber:#e6a33a;--c-slate:#9fb0ba}
+
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar .grow,.row .grow{flex:1 1 0}
+.toolbar select{padding:6px 10px;font-size:14px;border-radius:999px}
+.tl-panel{padding:0;overflow:hidden}
+.tl-head{display:flex;align-items:center;gap:8px 12px;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tl-head .hint{flex:1 1 220px;font-size:13px;color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--surface);width:fit-content}
+.seg button{border:0;background:none;color:var(--muted);padding:4px 12px;border-radius:999px;font-size:14px;font-weight:600;min-width:36px}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.tl-scroll{overflow-x:auto;overflow-y:hidden;position:relative;overscroll-behavior-x:contain}
+.tl-spacer{position:relative}
+#tl{position:sticky;left:0;top:0;display:block;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;outline-offset:-3px}
+.tl-scroll.drop{outline:3px dashed var(--accent);outline-offset:-6px}
+.selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border-top:1px solid var(--line);background:var(--sunk)}
+.selbar .what{flex:1 1 180px;min-width:0;font-size:14px}
+.selbar .what b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.selbar .what span{color:var(--muted);font-size:13px}
+.swatches{display:flex;gap:8px;flex-wrap:wrap}
+.swatch{width:32px;height:32px;border-radius:999px;border:3px solid var(--surface);box-shadow:0 0 0 1px var(--line);background:var(--sw);padding:0}
+.swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
+.dot{width:12px;height:12px;border-radius:999px;background:var(--sw);flex:none}
+.list-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);min-width:0}
+.list-row:first-child{border-top:0}
+.list-row .t{flex:1;min-width:0}
+.list-row .t b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list-row .t span{display:block;font-size:13px;color:var(--muted)}
+.thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;background:var(--sunk);flex:none}
+details.photos{margin:0 0 4px 22px}
+details.photos>summary{cursor:pointer;font-size:13px;color:var(--accent);padding:2px 0;width:fit-content}
+.form{display:flex;flex-direction:column;gap:14px}
+.form .inline{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
+.form .inline > *{flex:1 1 140px}
+.form label.cb{display:flex;gap:10px;align-items:center;font-size:15px}
+.form label.cb input{width:20px;height:20px;accent-color:var(--accent);flex:none}
+input[type=date],input[type=datetime-local]{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:15px;min-width:0;text-transform:none;letter-spacing:0;font-weight:500;color:var(--ink)}
+input[type=range]{accent-color:var(--accent);width:100%}
+.preview{width:100%;max-height:240px;object-fit:contain;border-radius:8px;background:var(--sunk)}
+.note{font-size:13px;color:var(--muted)}
+.hero{display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:28px 20px}
+.hero p{max-width:60ch;color:var(--muted)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (pointer:coarse){.btn{min-height:40px}.btn.sm{min-height:36px}.seg button{min-height:36px}.toolbar select{min-height:40px}}
+@media (max-width:520px){.toolbar .btn{flex:1 1 auto}.toolbar .grow{display:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="topbar" style="padding-bottom:12px">
+      <a data-hub-link href="https://petravanta.github.io/general/">All apps</a>
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="6" width="11" height="9" rx="2" fill="var(--accent)"/><rect x="17" y="10" width="12" height="9" rx="2" fill="var(--accent)" opacity=".55"/><path d="M3 25h26" stroke="var(--ink)" stroke-width="2.4" stroke-linecap="round"/><circle cx="8.5" cy="25" r="2.6" fill="var(--ink)"/><circle cx="23" cy="25" r="2.6" fill="var(--ink)"/></svg>
+        Photo Timeline
+      </div>
+    </div>
+  </div>
+</header>
+<main class="wrap stack">
+  <div class="toolbar">
+    <button class="btn primary" id="addPhotos" type="button">Add photos</button>
+    <label class="sr-only" for="trackPick">Add photos to track</label>
+    <select id="trackPick" hidden></select>
+    <button class="btn" id="addTrack" type="button">+ Track</button>
+    <button class="btn" id="addBand" type="button">+ Band</button>
+    <button class="btn" id="addEvent" type="button">+ Event</button>
+    <span class="grow"></span>
+    <button class="btn" id="exportBtn" type="button">Save as image</button>
+    <button class="btn ghost" id="settingsBtn" type="button">Settings</button>
+  </div>
+
+  <section class="panel hero" id="empty" hidden>
+    <h2>Lay your photos out in time</h2>
+    <p>Add photos and they line up by the date they were taken. Drag them to another day or another track, mark periods with bands and special days with events, then save the whole timeline as an image.</p>
+    <button class="btn primary big" id="emptyAdd" type="button">Add photos</button>
+    <p class="small">Photos stay on this device. Nothing is uploaded.</p>
+  </section>
+
+  <section class="panel tl-panel" id="tlPanel" hidden>
+    <div class="tl-head">
+      <div class="seg" role="group" aria-label="Zoom">
+        <button type="button" id="zoomOut" aria-label="Zoom out">−</button>
+        <button type="button" id="zoomFit" aria-pressed="true">Fit</button>
+        <button type="button" id="zoomIn" aria-label="Zoom in">+</button>
+      </div>
+      <p class="hint" id="hint"></p>
+    </div>
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-spacer" id="tlSpacer">
+        <canvas id="tl" tabindex="0" role="application" aria-roledescription="timeline" aria-label="Timeline. Select an item, then use the arrow keys to move it and Enter to edit it. Every item is also listed below the timeline."></canvas>
+      </div>
+    </div>
+    <div class="selbar" id="selbar" hidden></div>
+  </section>
+
+  <section class="panel stack" id="items" hidden></section>
+  <p class="sr-only" id="live" aria-live="polite"></p>
+</main>
+<div id="layer"></div>
+<input type="file" id="photoIn" accept="image/*" multiple hidden>
+<input type="file" id="backupIn" accept="application/json,.json" hidden>
+<script>
+'use strict';
+/* Photo Timeline. Photos sit on one or more tracks at the date they were taken and can be dragged to another date
+   or track; bands mark periods (drawn like Gantt bars) and events mark single days. Everything is drawn on one
+   canvas by draw(), which also renders the saved image, so the image matches the screen.
+   User data follows the "User data" section of petravanta/general STANDARDS.md. The photos themselves are too big
+   for localStorage, so they live in IndexedDB keyed by photo id; the document only refers to them by id. */
+
+const KEY = 'photoTimeline.data';
+const DAY = 864e5;
+const MAX_SIDE = 1600;           // longest side a photo is stored at
+const COLORS = ['teal', 'indigo', 'pink', 'orange', 'blue', 'green', 'amber', 'slate'];
+const COLOR_NAMES = { teal: 'Teal', indigo: 'Indigo', pink: 'Pink', orange: 'Orange', blue: 'Blue', green: 'Green', amber: 'Amber', slate: 'Slate' };
+// Canvas layout, in CSS pixels
+const PADX = 16, PADY = 14, GAP = 6, HEAD = 26, STEM = 18, TRACK_FOOT = 10, AXIS = 36, EV_LANE = 28, BAND_LANE = 30;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+const now = () => new Date().toISOString();
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const pad = n => String(n).padStart(2, '0');
+const coarse = matchMedia('(pointer:coarse)');
+
+/* ---------- Dates. Stored as local wall-clock strings, as cameras record them: photos to the second, bands and events to the day ---------- */
+function parseLocal(s) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)(?:T(\d\d):(\d\d)(?::(\d\d))?)?/.exec(s || '');
+  return m ? new Date(+m[1], m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime() : NaN;
+}
+function fmtLocal(ms, withTime) {
+  const d = new Date(ms);
+  const s = `${String(d.getFullYear()).padStart(4, '0')}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return withTime ? `${s}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : s;
+}
+const startOfDay = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+const nearestDay = ms => startOfDay(ms + DAY / 2);
+function addDays(s, n) { const d = new Date(parseLocal(s)); d.setDate(d.getDate() + n); return fmtLocal(d.getTime()); }
+const bandEnd = b => parseLocal(addDays(b.end, 1));   // a band's end day is included
+const F = {
+  dm: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }),
+  dmy: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }),
+  m: new Intl.DateTimeFormat(undefined, { month: 'short' }),
+  my: new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }),
+  y: new Intl.DateTimeFormat(undefined, { year: 'numeric' }),
+  hm: new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }),
+  full: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+};
+const showDay = s => F.dmy.format(parseLocal(s));
+const showTime = s => F.full.format(parseLocal(s));
+function showRange(b) { return b.start === b.end ? showDay(b.start) : `${showDay(b.start)} – ${showDay(b.end)}`; }
+
+/* ---------- Document ---------- */
+function blankDoc() {
+  const t = now();
+  return {
+    version: 1,
+    settings: { title: '', zoom: 1, captions: true, dates: false, shading: true, updatedAt: t },
+    tracks: [{ id: uid(), name: 'Photos', color: 'teal', height: null, overlap: 'spread', order: 0, u: t }],
+    photos: [], bands: [], events: [], deleted: []
+  };
+}
+function upgrade(d) {
+  const b = blankDoc();
+  d = d && typeof d === 'object' ? d : b;
+  d.settings = Object.assign({}, b.settings, d.settings || {});
+  for (const k of ['tracks', 'photos', 'bands', 'events', 'deleted']) if (!Array.isArray(d[k])) d[k] = [];
+  if (!d.tracks.length) d.tracks = b.tracks;
+  d.tracks.forEach((t, i) => { t.order ??= i; t.color = COLORS.includes(t.color) ? t.color : 'teal'; t.overlap ??= 'spread'; t.height ??= null; });
+  d.version = 1;
+  return d;
+}
+function load() { try { return upgrade(JSON.parse(localStorage.getItem(KEY))); } catch (e) { return blankDoc(); } }
+let doc = load();
+let saveTimer;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { toast('Couldn’t save in this browser. Use Settings → Export backup to keep a copy.'); }
+  }, 250);
+}
+/* Merge two copies as STANDARDS.md says: records by id (newer u wins), deletions win, newer settings win */
+function mergeDocs(a, b) {
+  const del = new Set([...(a.deleted || []), ...(b.deleted || [])]);
+  const out = { version: 1, deleted: [...del] };
+  out.settings = (b.settings?.updatedAt || '') > (a.settings?.updatedAt || '') ? b.settings : a.settings;
+  for (const k of ['tracks', 'photos', 'bands', 'events']) {
+    const m = new Map();
+    for (const r of [...(a[k] || []), ...(b[k] || [])]) {
+      if (!r || !r.id || del.has(r.id)) continue;
+      const o = m.get(r.id);
+      if (!o || (r.u || '') > (o.u || '')) m.set(r.id, r);
+    }
+    out[k] = [...m.values()];
+  }
+  return upgrade(out);
+}
+const touchRec = r => { r.u = now(); };
+const touchSettings = () => { doc.settings.updatedAt = now(); };
+function remove(kind, id) {
+  doc[kind] = doc[kind].filter(r => r.id !== id);
+  doc.deleted.push(id);
+  if (kind === 'photos') { idb.del(id).catch(() => {}); forgetImg(id); }
+}
+const tracksSorted = () => doc.tracks.slice().sort((a, b) => a.order - b.order);
+const trackOf = p => doc.tracks.find(t => t.id === p.track) || tracksSorted()[0];
+const find = (kind, id) => doc[kind].find(r => r.id === id);
+const KIND = { photo: 'photos', band: 'bands', event: 'events', track: 'tracks' };
+
+/* ---------- Photo storage (IndexedDB) ---------- */
+const idb = (() => {
+  let p;
+  const open = () => p || (p = new Promise((res, rej) => {
+    const r = indexedDB.open('photo-timeline', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('images');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+  const run = (mode, fn) => open().then(db => new Promise((res, rej) => {
+    const tx = db.transaction('images', mode), req = fn(tx.objectStore('images'));
+    tx.oncomplete = () => res(req.result);
+    tx.onerror = () => rej(tx.error);
+  }));
+  return { get: id => run('readonly', s => s.get(id)), put: (id, blob) => run('readwrite', s => s.put(blob, id)), del: id => run('readwrite', s => s.delete(id)) };
+})();
+
+const imgs = new Map();   // photo id -> { img, url } once loaded, or a promise while loading
+function getImg(id) {
+  const c = imgs.get(id);
+  if (c && c.img) return c.img;
+  if (!c) loadImg(id).then(() => { requestDraw(); fillThumbs(id); }, () => {});
+  return null;
+}
+function loadImg(id) {
+  const c = imgs.get(id);
+  if (c) return c.img ? Promise.resolve(c.img) : c;
+  const p = idb.get(id).then(async blob => {
+    if (!blob) throw new Error('missing');
+    const url = URL.createObjectURL(blob), img = new Image();
+    img.src = url;
+    await img.decode();
+    imgs.set(id, { img, url });
+    return img;
+  });
+  imgs.set(id, p);
+  p.catch(() => imgs.delete(id));
+  return p;
+}
+function forgetImg(id) { const c = imgs.get(id); if (c && c.url) URL.revokeObjectURL(c.url); imgs.delete(id); }
+
+/* Reads the date a JPEG was taken from its EXIF block (DateTimeOriginal, then DateTimeDigitized, then DateTime) */
+async function exifDate(file) {
+  try {
+    const v = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    for (let o = 2; o + 10 < v.byteLength;) {
+      const marker = v.getUint16(o), len = v.getUint16(o + 2);
+      if ((marker & 0xFF00) !== 0xFF00) return null;
+      if (marker === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) return readTiffDate(v, o + 10);
+      o += 2 + len;
+    }
+  } catch (e) {}
+  return null;
+}
+function readTiffDate(v, t) {
+  const le = v.getUint16(t) === 0x4949;
+  const u16 = p => v.getUint16(p, le), u32 = p => v.getUint32(p, le);
+  const ifd = p => { const out = {}, n = u16(p); for (let i = 0; i < n; i++) { const e = p + 2 + i * 12; out[u16(e)] = { count: u32(e + 4), at: e + 8 }; } return out; };
+  const str = ent => {
+    if (!ent) return null;
+    const p = ent.count > 4 ? t + u32(ent.at) : ent.at;
+    let s = '';
+    for (let i = 0; i < ent.count - 1 && p + i < v.byteLength; i++) s += String.fromCharCode(v.getUint8(p + i));
+    return s;
+  };
+  const ifd0 = ifd(t + u32(t + 4));
+  let s = null;
+  if (ifd0[0x8769]) { const ex = ifd(t + u32(ifd0[0x8769].at)); s = str(ex[0x9003]) || str(ex[0x9004]); }
+  s = s || str(ifd0[0x0132]);
+  const m = /^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/.exec(s || '');
+  return m && m[1] !== '0000' ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}` : null;
+}
+async function shrink(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const s = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * s));
+    c.height = Math.max(1, Math.round(img.naturalHeight * s));
+    const x = c.getContext('2d');
+    x.fillStyle = '#fff';
+    x.fillRect(0, 0, c.width, c.height);
+    x.drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encode')), 'image/jpeg', 0.86));
+    return { blob, w: c.width, h: c.height };
+  } finally { URL.revokeObjectURL(url); }
+}
+async function addFiles(files, trackId) {
+  files = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif|avif)$/i.test(f.name));
+  if (!files.length) return toast('There were no photos in that selection.');
+  trackId = trackId || $('#trackPick').value || tracksSorted()[0].id;
+  const bad = [];
+  let added = 0;
+  for (const [i, f] of files.entries()) {
+    if (files.length > 1) toast(`Adding photo ${i + 1} of ${files.length}…`, 60000);
+    try {
+      const exif = await exifDate(f);
+      const taken = exif || fmtLocal(f.lastModified || Date.now(), true);
+      const { blob, w, h } = await shrink(f);
+      const id = uid();
+      await idb.put(id, blob);
+      doc.photos.push({ id, track: trackId, t: taken, taken, from: exif ? 'camera' : 'file', caption: '', name: f.name, w, h, u: now() });
+      added++;
+      changed();
+    } catch (e) { bad.push(f.name); }
+  }
+  if (bad.length) toast(`Added ${added}. Couldn’t read ${bad.length === 1 ? bad[0] : bad.length + ' files'}; this browser may not open that format.`, 6000);
+  else toast(added === 1 ? 'Photo added' : `${added} photos added`);
+}
+
+/* ---------- Layout: where everything goes, in CSS pixels. Independent of scrolling ---------- */
+/* Automatic photo height: share the window's height between the tracks, and shrink a crowded track until its
+   photos fit side by side across the width (down to a size that still reads) */
+let fitW = innerWidth;
+function autoTrackH(tr) {
+  const n = Math.max(1, doc.tracks.length);
+  const tall = Math.round((innerHeight - 340) / n) - HEAD - STEM - TRACK_FOOT;
+  const ps = doc.photos.filter(p => trackOf(p) === tr);
+  const wide = ps.length ? (fitW - 2 * PADX - GAP * ps.length) / ps.reduce((a, p) => a + aspect(p), 0) : Infinity;
+  return Math.round(clamp(Math.min(tall, wide), 56, 150));
+}
+const trackH = tr => tr.height || autoTrackH(tr);
+const aspect = p => clamp((p.w || 4) / (p.h || 3), 0.5, 2.2);
+const measure = document.createElement('canvas').getContext('2d');
+let K = {};   // theme tokens for drawing
+function font(weight, size, fam) { return `${weight} ${size}px ${fam || K.fBody}`; }
+
+/* Pushes overlapping photos apart. Overlapping runs become a group centered where their photos want to be,
+   which keeps each photo as close to its date as it can get; a stem joins it to its exact date. */
+function spread(items) {
+  const groups = [];
+  for (const it of items) {
+    let g = { items: [it], width: it.w, q: it.ax - it.w / 2 };
+    it.off = 0;
+    for (;;) {
+      const prev = groups[groups.length - 1];
+      if (!prev || prev.q / prev.items.length + prev.width + GAP <= g.q / g.items.length) break;
+      groups.pop();
+      const shift = prev.width + GAP;
+      for (const x of g.items) x.off += shift;
+      g = { items: prev.items.concat(g.items), width: prev.width + GAP + g.width, q: prev.q + g.q - g.items.length * shift };
+    }
+    groups.push(g);
+  }
+  for (const g of groups) { const left = g.q / g.items.length; for (const it of g.items) it.left = left + it.off; }
+}
+
+function layout(viewW, frozen, shift = 0) {
+  const S = doc.settings, tracks = tracksSorted();
+  let lo = Infinity, hi = -Infinity;
+  const see = t => { if (isFinite(t)) { lo = Math.min(lo, t); hi = Math.max(hi, t); } };
+  doc.photos.forEach(p => see(parseLocal(p.t)));
+  doc.bands.forEach(b => { see(parseLocal(b.start)); see(bandEnd(b)); });
+  doc.events.forEach(e => see(parseLocal(e.t)));
+  if (!isFinite(lo)) { const d = startOfDay(Date.now()); lo = d - 14 * DAY; hi = d + 14 * DAY; }
+  if (hi - lo < DAY) { lo -= DAY / 2; hi += DAY / 2; }
+  const padT = (hi - lo) * 0.03;
+  lo -= padT; hi += padT;
+  fitW = viewW;
+  const edge = Math.round(Math.min(Math.max(...tracks.map(trackH)) * 0.75, viewW * 0.15));
+  const L = { viewW, tracks: [], photos: [], bands: [], events: [], lo, hi };
+  if (frozen) Object.assign(L, frozen);
+  else {
+    L.ppd = Math.max(1e-4, (viewW - 2 * PADX - 2 * edge) / ((hi - lo) / DAY)) * (S.zoom || 1);
+    L.t0 = lo;
+    L.X0 = PADX + edge + shift;
+  }
+  const xOf = L.xOf = t => L.X0 + (t - L.t0) / DAY * L.ppd;
+  L.tOf = x => L.t0 + (x - L.X0) / L.ppd * DAY;
+
+  let y = PADY, minX = Infinity, maxX = xOf(hi) + edge;
+  if (S.title) { L.titleY = y + 20; y += 40; }
+
+  measure.font = font(600, 12);
+  if (doc.events.length) {
+    const lanes = [];
+    const evs = doc.events.map(e => ({ e, x: xOf(parseLocal(e.t)) })).sort((a, b) => a.x - b.x);
+    for (const it of evs) {
+      it.w = Math.ceil(measure.measureText(it.e.label || 'Event').width) + 18;
+      let lane = lanes.findIndex(r => r + GAP < it.x);
+      if (lane < 0) { lane = lanes.length; lanes.push(0); }
+      lanes[lane] = it.x + it.w;
+      it.y = y + lane * EV_LANE; it.h = EV_LANE - 6;
+      minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x + it.w);
+    }
+    L.events = evs;
+    y += lanes.length * EV_LANE + 4;
+  }
+  if (doc.bands.length) {
+    const lanes = [];
+    const bs = doc.bands.map(b => { const left = xOf(parseLocal(b.start)), right = Math.max(left + 4, xOf(bandEnd(b))); return { b, left, right }; })
+      .sort((a, b) => a.left - b.left || b.right - a.right);
+    for (const it of bs) {
+      it.labelW = Math.ceil(measure.measureText(it.b.label || 'Band').width) + 22;
+      const end = Math.max(it.right, it.left + it.labelW);
+      let lane = lanes.findIndex(r => r + GAP < it.left);
+      if (lane < 0) { lane = lanes.length; lanes.push(0); }
+      lanes[lane] = end;
+      it.y = y + lane * BAND_LANE; it.h = BAND_LANE - 8;
+      minX = Math.min(minX, it.left); maxX = Math.max(maxX, end);
+    }
+    L.bands = bs;
+    y += lanes.length * BAND_LANE + 4;
+  }
+  L.tracksTop = y;
+  for (const tr of tracks) {
+    const h = trackH(tr);
+    const T = { tr, y, h, photoTop: y + HEAD, base: y + HEAD + h + STEM };
+    T.bottom = T.base + TRACK_FOOT;
+    const ps = doc.photos.filter(p => trackOf(p) === tr)
+      .map(p => ({ p, T, ax: xOf(parseLocal(p.t)), w: Math.round(h * aspect(p)), h, top: T.photoTop }))
+      .sort((a, b) => a.ax - b.ax || (a.p.id < b.p.id ? -1 : 1));
+    if (tr.overlap === 'overlap') ps.forEach(it => { it.left = it.ax - it.w / 2; });
+    else spread(ps);
+    for (const it of ps) { minX = Math.min(minX, it.left, it.ax); maxX = Math.max(maxX, it.left + it.w); L.photos.push(it); }
+    L.tracks.push(T);
+    y = T.bottom;
+  }
+  L.tracksBottom = y;
+  L.axisY = y + 4;
+  L.H = Math.ceil(L.axisY + AXIS + PADY - 6);
+  if (!frozen && minX < PADX && !shift) return layout(viewW, null, PADX - minX);
+  L.W = Math.ceil(Math.max(viewW, maxX + PADX));
+  return L;
+}
+
+/* ---------- Time axis ticks ---------- */
+const UNITS = [['h', 1], ['h', 3], ['h', 6], ['h', 12], ['d', 1], ['d', 2], ['w', 1], ['M', 1], ['M', 3], ['M', 6], ['y', 1], ['y', 2], ['y', 5], ['y', 10], ['y', 25], ['y', 50], ['y', 100]];
+const UNIT_DAYS = { h: 1 / 24, d: 1, w: 7, M: 30.44, y: 365.25 };
+function pickUnit(ppd) {
+  for (const u of UNITS) if (UNIT_DAYS[u[0]] * u[1] * ppd >= (u[0] === 'y' ? 48 : 74)) return u;
+  return UNITS[UNITS.length - 1];
+}
+function floorTo(t, [u, n]) {
+  const d = new Date(t);
+  if (u === 'h') { d.setMinutes(0, 0, 0); d.setHours(d.getHours() - d.getHours() % n); return d; }
+  d.setHours(0, 0, 0, 0);
+  if (u === 'd') d.setDate(d.getDate() - (d.getDate() - 1) % n);
+  if (u === 'w') d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  if (u === 'M') { d.setDate(1); d.setMonth(d.getMonth() - d.getMonth() % n); }
+  if (u === 'y') { d.setMonth(0, 1); d.setFullYear(d.getFullYear() - d.getFullYear() % n); }
+  return d;
+}
+function stepTo(d, [u, n]) {
+  if (u === 'h') d.setHours(d.getHours() + n);
+  if (u === 'd') d.setDate(d.getDate() + n);
+  if (u === 'w') d.setDate(d.getDate() + 7 * n);
+  if (u === 'M') d.setMonth(d.getMonth() + n);
+  if (u === 'y') d.setFullYear(d.getFullYear() + n);
+}
+function ticks(from, to, ppd) {
+  const unit = pickUnit(ppd), out = [];
+  const d = floorTo(from, unit);
+  let prevYear = null;
+  for (let i = 0; d.getTime() <= to && i < 2000; i++) {
+    const t = d.getTime(), y = d.getFullYear(), newYear = prevYear !== null && y !== prevYear;
+    let label;
+    if (unit[0] === 'h') label = d.getHours() === 0 ? F.dm.format(d) : F.hm.format(d);
+    else if (unit[0] === 'd' || unit[0] === 'w') label = (prevYear === null || newYear) ? F.dmy.format(d) : F.dm.format(d);
+    else if (unit[0] === 'M') label = (prevYear === null || d.getMonth() === 0) ? F.my.format(d) : F.m.format(d);
+    else label = F.y.format(d);
+    out.push({ t, label, major: unit[0] === 'h' ? d.getHours() === 0 : unit[0] === 'M' ? d.getMonth() === 0 : false });
+    prevYear = y;
+    stepTo(d, unit);
+  }
+  return out;
+}
+
+/* ---------- Drawing ---------- */
+function readTokens() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim();
+  const k = { c: {} };
+  for (const n of ['bg', 'surface', 'sunk', 'line', 'ink', 'muted', 'faint', 'accent']) k[n] = g('--' + n);
+  k.fBody = g('--f-body'); k.fDisplay = g('--f-display');
+  for (const c of COLORS) k.c[c] = g('--c-' + c);
+  return k;
+}
+function tokensFor(theme) {
+  if (theme === 'current') return readTokens();
+  const r = document.documentElement, prev = r.getAttribute('data-theme');
+  r.setAttribute('data-theme', theme);
+  const k = readTokens();
+  if (prev) r.setAttribute('data-theme', prev); else r.removeAttribute('data-theme');
+  return k;
+}
+function rgba(hex, a) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})` : hex;
+}
+function rr(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function fit(ctx, s, max) {
+  if (ctx.measureText(s).width <= max) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ctx.measureText(s.slice(0, m) + '…').width <= max) lo = m; else hi = m - 1; }
+  return lo ? s.slice(0, lo) + '…' : '';
+}
+const isSel = (kind, id) => sel && sel.kind === kind && sel.id === id;
+
+/* o: { k: tokens, ox: left edge of what is drawn, vw: width drawn, screen: true on screen (sticky labels, selection) } */
+function draw(ctx, L, o) {
+  const k = o.k, S = doc.settings, x0 = o.ox, x1 = o.ox + o.vw;
+  const vis = (l, r) => r >= x0 - 4 && l <= x1 + 4;
+  const stickyX = o.screen ? x0 + PADX : PADX;
+  ctx.save();
+  ctx.fillStyle = k.surface;
+  ctx.fillRect(0, 0, o.vw, L.H);
+  ctx.translate(-x0, 0);
+  ctx.textBaseline = 'alphabetic';
+
+  // Band shading behind the tracks
+  if (S.shading) for (const it of L.bands) {
+    if (!vis(it.left, it.right)) continue;
+    ctx.fillStyle = rgba(k.c[it.b.color] || k.accent, 0.08);
+    ctx.fillRect(it.left, L.tracksTop, it.right - it.left, L.tracksBottom - L.tracksTop);
+  }
+  // Grid
+  const tk = ticks(L.tOf(x0 - 80), L.tOf(x1 + 80), L.ppd);
+  ctx.lineWidth = 1;
+  for (const t of tk) {
+    const x = Math.round(L.xOf(t.t)) + 0.5;
+    ctx.strokeStyle = rgba(k.line, t.major ? 1 : 0.6);
+    ctx.beginPath(); ctx.moveTo(x, L.tracksTop); ctx.lineTo(x, L.axisY); ctx.stroke();
+  }
+  // Tracks: separators and baselines
+  for (const T of L.tracks) {
+    const col = k.c[T.tr.color];
+    if (T !== L.tracks[0]) { ctx.strokeStyle = k.line; ctx.beginPath(); ctx.moveTo(x0, T.y + 0.5); ctx.lineTo(x1, T.y + 0.5); ctx.stroke(); }
+    ctx.strokeStyle = rgba(col, 0.45); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x0, T.base); ctx.lineTo(x1, T.base); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  for (const it of L.events) {
+    if (!vis(it.x - 6, it.x + 6)) continue;
+    ctx.strokeStyle = k.c[it.e.color] || k.accent; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(it.x, it.y + it.h); ctx.lineTo(it.x, L.axisY); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // Stems and date dots, then the photos over them
+  for (const it of L.photos) {
+    if (!vis(Math.min(it.left, it.ax), Math.max(it.left + it.w, it.ax))) continue;
+    const col = k.c[it.T.tr.color];
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(it.left + it.w / 2, it.top + it.h); ctx.lineTo(it.ax, it.T.base); ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(it.ax, it.T.base, 4, 0, 7); ctx.fill();
+  }
+  let dragged = null;
+  for (const it of L.photos) {
+    if (!vis(it.left, it.left + it.w)) continue;
+    if (o.screen && drag && drag.moved && isSel('photo', it.p.id)) { dragged = it; continue; }
+    drawPhoto(ctx, it, k, o);
+  }
+  if (dragged) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; drawPhoto(ctx, dragged, k, o); ctx.restore(); }
+  // Track names stay at the left edge while scrolling
+  for (const T of L.tracks) {
+    ctx.font = font(600, 13);
+    const name = fit(ctx, T.tr.name || 'Track', Math.min(260, o.vw - 2 * PADX - 20));
+    const w = ctx.measureText(name).width;
+    ctx.fillStyle = rgba(k.surface, 0.9);
+    rr(ctx, stickyX - 4, T.y + 4, w + 26, 20, 6); ctx.fill();
+    ctx.fillStyle = k.c[T.tr.color];
+    ctx.beginPath(); ctx.arc(stickyX + 5, T.y + 14, 5, 0, 7); ctx.fill();
+    ctx.fillStyle = k.ink;
+    ctx.fillText(name, stickyX + 16, T.y + 19);
+  }
+  // Bands, like Gantt bars
+  for (const it of L.bands) {
+    if (!vis(it.left, Math.max(it.right, it.left + it.labelW))) continue;
+    const col = k.c[it.b.color] || k.accent, w = it.right - it.left;
+    ctx.fillStyle = rgba(col, 0.2);
+    rr(ctx, it.left, it.y, w, it.h, 5); ctx.fill();
+    ctx.save(); rr(ctx, it.left, it.y, w, it.h, 5); ctx.clip();
+    ctx.fillStyle = col; ctx.fillRect(it.left, it.y, 4, it.h);
+    ctx.restore();
+    if (o.screen && isSel('band', it.b.id)) { ctx.strokeStyle = k.ink; ctx.lineWidth = 2; rr(ctx, it.left - 2, it.y - 2, w + 4, it.h + 4, 7); ctx.stroke(); ctx.lineWidth = 1; }
+    ctx.font = font(600, 12); ctx.fillStyle = k.ink;
+    let lx = it.left + 11;
+    if (o.screen && lx < stickyX && it.right - it.labelW > stickyX) lx = stickyX;   // keep the label in view
+    ctx.fillText(it.b.label || 'Band', lx, it.y + it.h / 2 + 4);
+  }
+  // Events: a flag with a dashed line down to the axis, under the photos
+  for (const it of L.events) {
+    if (!vis(it.x - 6, it.x + it.w)) continue;
+    const col = k.c[it.e.color] || k.accent;
+    ctx.fillStyle = rgba(k.surface, 1); rr(ctx, it.x, it.y, it.w, it.h, 4); ctx.fill();
+    ctx.fillStyle = rgba(col, 0.18); rr(ctx, it.x, it.y, it.w, it.h, 4); ctx.fill();
+    ctx.fillStyle = col; ctx.fillRect(it.x - 1, it.y, 2.5, it.h);
+    if (o.screen && isSel('event', it.e.id)) { ctx.strokeStyle = k.ink; ctx.lineWidth = 2; rr(ctx, it.x - 3, it.y - 2, it.w + 5, it.h + 4, 6); ctx.stroke(); }
+    ctx.font = font(600, 12); ctx.fillStyle = k.ink;
+    ctx.fillText(it.e.label || 'Event', it.x + 9, it.y + it.h / 2 + 4);
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(it.x, L.axisY - 5); ctx.lineTo(it.x + 5, L.axisY); ctx.lineTo(it.x, L.axisY + 5); ctx.lineTo(it.x - 5, L.axisY); ctx.fill();
+  }
+  // Axis
+  ctx.strokeStyle = k.muted; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0, L.axisY + 0.5); ctx.lineTo(x1, L.axisY + 0.5); ctx.stroke();
+  ctx.font = font(500, 12); ctx.fillStyle = k.muted; ctx.textAlign = 'center';
+  let lastR = -Infinity;
+  for (const t of tk) {
+    const x = Math.round(L.xOf(t.t)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x, L.axisY); ctx.lineTo(x, L.axisY + 5); ctx.stroke();
+    const w = ctx.measureText(t.label).width;
+    if (x - w / 2 > lastR + 6) { ctx.fillText(t.label, x, L.axisY + 20); lastR = x + w / 2; }
+  }
+  ctx.textAlign = 'left';
+  // Title
+  if (S.title) {
+    ctx.font = font(500, 20, k.fDisplay); ctx.fillStyle = k.ink;
+    ctx.fillText(fit(ctx, S.title, o.vw - 2 * PADX), stickyX, L.titleY);
+  }
+  // While dragging, show where the item will land
+  if (o.screen && drag && drag.moved && sel) {
+    const label = selDate();
+    const p = drag.at;
+    ctx.font = font(600, 12);
+    const w = ctx.measureText(label).width + 16, bx = clamp(p.x - w / 2, x0 + 4, x1 - w - 4), by = Math.max(2, p.y - 40);
+    ctx.fillStyle = k.ink; rr(ctx, bx, by, w, 22, 11); ctx.fill();
+    ctx.fillStyle = k.surface; ctx.fillText(label, bx + 8, by + 15);
+  }
+  ctx.restore();
+}
+function drawPhoto(ctx, it, k, o) {
+  const { left, top, w, h, p } = it, S = doc.settings;
+  const img = o.images ? o.images.get(p.id) : getImg(p.id);
+  ctx.save();
+  rr(ctx, left, top, w, h, 6);
+  ctx.fillStyle = k.sunk; ctx.fill();
+  ctx.clip();
+  if (img) {
+    // Cover the box, cropping the middle when the photo is narrower or wider than the box allows
+    const ia = img.naturalWidth / img.naturalHeight, ba = w / h;
+    let sw = img.naturalWidth, sh = img.naturalHeight, sx = 0, sy = 0;
+    if (ia > ba) { sw = sh * ba; sx = (img.naturalWidth - sw) / 2; } else { sh = sw / ba; sy = (img.naturalHeight - sh) / 2; }
+    ctx.drawImage(img, sx, sy, sw, sh, left, top, w, h);
+  }
+  const lines = [];
+  if (S.captions && p.caption) lines.push(p.caption);
+  if (S.dates) lines.push(F.dmy.format(parseLocal(p.t)));
+  if (lines.length && w >= 56 && h >= 48) {
+    const sh = 8 + lines.length * 15;
+    ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(left, top + h - sh, w, sh);
+    ctx.fillStyle = '#fff'; ctx.font = font(600, 12);
+    lines.forEach((s, i) => ctx.fillText(fit(ctx, s, w - 12), left + 6, top + h - sh + 16 + i * 15));
+  }
+  ctx.restore();
+  ctx.strokeStyle = rgba(k.ink, 0.18); ctx.lineWidth = 1;
+  rr(ctx, left + 0.5, top + 0.5, w - 1, h - 1, 6); ctx.stroke();
+  if (o.screen && isSel('photo', p.id)) { ctx.strokeStyle = k.accent; ctx.lineWidth = 3; rr(ctx, left - 2.5, top - 2.5, w + 5, h + 5, 8); ctx.stroke(); }
+}
+
+/* ---------- Screen canvas ---------- */
+const sc = $('#tlScroll'), spacer = $('#tlSpacer'), cv = $('#tl'), cx = cv.getContext('2d');
+let L = null, frozen = null, sel = null, drag = null, relayout = true, raf = 0, dpr = 1;
+function requestDraw(again = true) {
+  relayout = relayout || again;
+  if (!raf) raf = requestAnimationFrame(paint);
+}
+function paint() {
+  raf = 0;
+  if ($('#tlPanel').hidden) return;
+  const vw = sc.clientWidth;
+  if (relayout || !L) {
+    L = layout(vw, frozen);
+    spacer.style.width = L.W + 'px';
+    spacer.style.height = L.H + 'px';
+    relayout = false;
+  }
+  dpr = Math.min(devicePixelRatio || 1, 3);
+  while (dpr > 1 && vw * L.H * dpr * dpr > 16e6) dpr -= 0.5;   // stay inside Safari's canvas size limit
+  const w = Math.round(vw * dpr), h = Math.round(L.H * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; cv.style.width = vw + 'px'; cv.style.height = L.H + 'px'; }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw(cx, L, { k: K, ox: sc.scrollLeft, vw, screen: true });
+}
+sc.addEventListener('scroll', () => requestDraw(false), { passive: true });
+addEventListener('resize', () => requestDraw());
+function themeChanged() { K = readTokens(); requestDraw(false); }
+new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeChanged);
+
+function hitTest(x, y, touch) {
+  for (let i = L.photos.length - 1; i >= 0; i--) {
+    const it = L.photos[i];
+    if (x >= it.left && x <= it.left + it.w && y >= it.top && y <= it.top + it.h) return { kind: 'photo', id: it.p.id };
+  }
+  for (const it of L.events) if (x >= it.x - 6 && x <= it.x + it.w && y >= it.y && y <= it.y + it.h) return { kind: 'event', id: it.e.id };
+  const edge = touch ? 14 : 7;
+  for (const it of L.bands) {
+    if (y < it.y - 2 || y > it.y + it.h + 2 || x < it.left - edge || x > Math.max(it.right, it.left + it.labelW) + edge) continue;
+    const wide = it.right - it.left > 3 * edge;
+    const part = wide && Math.abs(x - it.left) <= edge ? 'start' : Math.abs(x - it.right) <= edge ? 'end' : 'body';
+    return { kind: 'band', id: it.b.id, part };
+  }
+  for (const T of L.tracks) if (y >= T.y && y < T.y + HEAD && x < sc.scrollLeft + PADX + 280) return { kind: 'track', id: T.tr.id };
+  return null;
+}
+const trackAt = y => L.tracks.find(T => y >= T.y && y < T.bottom) || (y < L.tracksTop ? L.tracks[0] : y >= L.tracksBottom ? L.tracks[L.tracks.length - 1] : null);
+function point(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left + sc.scrollLeft, y: e.clientY - r.top }; }
+function select(s, announce = true) {
+  sel = s && s.kind !== 'track' ? { kind: s.kind, id: s.id } : null;
+  renderSelbar();
+  requestDraw(false);
+  if (announce && sel) $('#live').textContent = `${selName()} selected, ${selDate()}`;
+}
+function selItem() { return sel && find(KIND[sel.kind], sel.id); }
+function selName() {
+  const r = selItem();
+  if (!r) return '';
+  if (sel.kind === 'photo') return r.caption || r.name || 'Photo';
+  return r.label || (sel.kind === 'band' ? 'Band' : 'Event');
+}
+function selDate() {
+  const r = selItem();
+  if (!r) return '';
+  return sel.kind === 'photo' ? showTime(r.t) : sel.kind === 'band' ? showRange(r) : showDay(r.t);
+}
+
+cv.addEventListener('pointerdown', e => {
+  if (e.button > 0 || !L) return;
+  const p = point(e), touch = e.pointerType === 'touch', hit = hitTest(p.x, p.y, touch);
+  drag = { pid: e.pointerId, cx: e.clientX, cy: e.clientY, sx: sc.scrollLeft, hit, touch, moved: false, active: false, at: p, wasSelected: !!hit && isSel(hit.kind, hit.id) };
+  // A mouse picks things up at once. A finger picks up an item that is already selected, or any item after a
+  // short hold, so a swipe that starts on a photo still scrolls the page.
+  if (hit && hit.kind !== 'track') {
+    if (!touch || isSel(hit.kind, hit.id)) startDrag();
+    else drag.timer = setTimeout(() => { if (drag && !drag.moved) { select(hit); startDrag(); navigator.vibrate?.(10); requestDraw(false); } }, 380);
+  }
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+});
+function startDrag() {
+  const r = find(KIND[drag.hit.kind], drag.hit.id);
+  if (!r) return;
+  drag.active = true;
+  drag.orig = { ...r };
+  frozen = { ppd: L.ppd, t0: L.t0, X0: L.X0 };
+  if (!isSel(drag.hit.kind, drag.hit.id)) select(drag.hit, false);
+}
+cv.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.pid) {
+    if (!drag && e.pointerType === 'mouse' && L) { const p = point(e), h = hitTest(p.x, p.y); cv.style.cursor = !h ? 'grab' : h.kind === 'band' && h.part !== 'body' ? 'ew-resize' : 'pointer'; }
+    return;
+  }
+  const dx = e.clientX - drag.cx, dy = e.clientY - drag.cy;
+  if (!drag.moved && Math.hypot(dx, dy) > 6) { drag.moved = true; clearTimeout(drag.timer); }
+  if (!drag.moved) return;
+  drag.at = point(e);
+  if (drag.active) {
+    const r = sc.getBoundingClientRect();
+    if (e.clientX < r.left + 32) sc.scrollLeft -= 12; else if (e.clientX > r.right - 32) sc.scrollLeft += 12;
+    applyDrag(dx + sc.scrollLeft - drag.sx, drag.at.y);
+  } else sc.scrollLeft = drag.sx - dx;   // drag on empty space pans sideways
+});
+// Stop the page from scrolling while a finger is moving an item
+cv.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefault(); }, { passive: false });
+function applyDrag(dxPx, y) {
+  const r = selItem(), o = drag.orig, days = dxPx / L.ppd;
+  if (!r) return;
+  if (sel.kind === 'photo') {
+    r.t = fmtLocal(parseLocal(o.t) + days * DAY, true);
+    const T = trackAt(y);
+    if (T) r.track = T.tr.id;
+  } else if (sel.kind === 'event') r.t = fmtLocal(nearestDay(parseLocal(o.t) + days * DAY));
+  else {
+    const n = Math.round(days), part = drag.hit.part;
+    if (part === 'body') { r.start = addDays(o.start, n); r.end = addDays(o.end, n); }
+    else if (part === 'start') r.start = parseLocal(addDays(o.start, n)) > parseLocal(o.end) ? o.end : addDays(o.start, n);
+    else r.end = parseLocal(addDays(o.end, n)) < parseLocal(o.start) ? o.start : addDays(o.end, n);
+  }
+  requestDraw();
+  renderSelbar();
+}
+function endDrag(e, cancel) {
+  if (!drag || (e && e.pointerId !== drag.pid)) return;
+  clearTimeout(drag.timer);
+  const d = drag;
+  drag = null;
+  frozen = null;
+  if (d.active && d.moved) {
+    const r = selItem();
+    if (cancel && r) Object.assign(r, d.orig);
+    else if (r) { touchRec(r); $('#live').textContent = `${selName()} moved to ${selDate()}`; }
+    changed();
+  } else if (!d.moved && !cancel) {
+    if (d.hit && d.hit.kind === 'track') openEditor({ kind: 'track', id: d.hit.id });
+    else if (d.hit && d.touch && isSel(d.hit.kind, d.hit.id) && d.wasSelected) openEditor(d.hit);
+    else select(d.hit);
+  }
+  requestDraw();
+}
+cv.addEventListener('pointerup', e => endDrag(e));
+cv.addEventListener('pointercancel', e => endDrag(e, true));
+cv.addEventListener('dblclick', e => { const p = point(e), h = hitTest(p.x, p.y); if (h && h.kind !== 'track') openEditor(h); });
+cv.addEventListener('wheel', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  zoomBy(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - cv.getBoundingClientRect().left);
+}, { passive: false });
+cv.addEventListener('keydown', e => {
+  if (!sel) {
+    if (e.key.startsWith('Arrow') || e.key === 'Enter') { const first = L.photos[0] || L.bands[0] || L.events[0]; if (first) { select(first.p ? { kind: 'photo', id: first.p.id } : first.b ? { kind: 'band', id: first.b.id } : { kind: 'event', id: first.e.id }); e.preventDefault(); } }
+    return;
+  }
+  const step = e.shiftKey ? 7 : 1;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { nudge(e.key === 'ArrowLeft' ? -step : step); e.preventDefault(); }
+  else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && sel.kind === 'photo') { moveTrack(e.key === 'ArrowUp' ? -1 : 1); e.preventDefault(); }
+  else if (e.key === 'Enter') { openEditor(sel); e.preventDefault(); }
+  else if (e.key === 'Escape') select(null);
+});
+function nudge(days) {
+  const r = selItem();
+  if (!r) return;
+  if (sel.kind === 'photo') { const d = new Date(parseLocal(r.t)); d.setDate(d.getDate() + days); r.t = fmtLocal(d.getTime(), true); }
+  else if (sel.kind === 'event') r.t = addDays(r.t, days);
+  else { r.start = addDays(r.start, days); r.end = addDays(r.end, days); }
+  touchRec(r); changed();
+  $('#live').textContent = `${selName()} moved to ${selDate()}`;
+}
+function moveTrack(dir) {
+  const r = selItem(), ts = tracksSorted(), i = ts.indexOf(trackOf(r)), t = ts[i + dir];
+  if (!t) return;
+  r.track = t.id; touchRec(r); changed();
+  $('#live').textContent = `${selName()} moved to track ${t.name}`;
+}
+function zoomBy(f, anchorX) {
+  if (!L) return;
+  const ax = anchorX ?? sc.clientWidth / 2, t = L.tOf(sc.scrollLeft + ax);
+  doc.settings.zoom = clamp((doc.settings.zoom || 1) * f, 1, 400);
+  if (Math.abs(doc.settings.zoom - 1) < 0.01) doc.settings.zoom = 1;
+  touchSettings(); save();
+  L = layout(sc.clientWidth, null);
+  spacer.style.width = L.W + 'px'; spacer.style.height = L.H + 'px';
+  sc.scrollLeft = L.xOf(t) - ax;
+  relayout = false;
+  renderZoom();
+  requestDraw(false);
+}
+function renderZoom() { $('#zoomFit').setAttribute('aria-pressed', String((doc.settings.zoom || 1) === 1)); $('#zoomOut').disabled = (doc.settings.zoom || 1) <= 1; }
+$('#zoomIn').onclick = () => zoomBy(1.5);
+$('#zoomOut').onclick = () => zoomBy(1 / 1.5);
+$('#zoomFit').onclick = () => { doc.settings.zoom = 1; touchSettings(); save(); renderZoom(); requestDraw(); sc.scrollLeft = 0; };
+
+// Drop photos from the desktop onto a track
+sc.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); sc.classList.add('drop'); } });
+sc.addEventListener('dragleave', () => sc.classList.remove('drop'));
+sc.addEventListener('drop', e => {
+  e.preventDefault(); sc.classList.remove('drop');
+  const T = L && trackAt(point(e).y);
+  addFiles(e.dataTransfer.files, T && T.tr.id);
+});
+document.addEventListener('dragover', e => { if ($('#tlPanel').hidden) e.preventDefault(); });
+document.addEventListener('drop', e => { if ($('#tlPanel').hidden && e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+
+/* ---------- Page UI ---------- */
+function changed() { save(); requestDraw(); renderUI(); }
+function renderUI() {
+  const any = doc.photos.length || doc.bands.length || doc.events.length;
+  const wasHidden = $('#tlPanel').hidden;
+  $('#empty').hidden = !!any;
+  $('#tlPanel').hidden = !any;
+  $('#items').hidden = !any;
+  const ts = tracksSorted(), pick = $('#trackPick'), cur = pick.value;
+  pick.hidden = ts.length < 2;
+  pick.innerHTML = ts.map(t => `<option value="${esc(t.id)}">to ${esc(t.name || 'Track')}</option>`).join('');
+  if (ts.some(t => t.id === cur)) pick.value = cur;
+  $('#hint').textContent = coarse.matches
+    ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away.'
+    : 'Drag photos to a new date or track. Double-click anything to edit it. Ctrl + scroll zooms.';
+  if (sel && !selItem()) sel = null;
+  renderZoom();
+  renderSelbar();
+  renderItems();
+  if (wasHidden && any) requestDraw();
+}
+function renderSelbar() {
+  const bar = $('#selbar'), r = selItem();
+  bar.hidden = !r;
+  if (!r) return;
+  const kindName = { photo: 'Photo', band: 'Band', event: 'Event' }[sel.kind];
+  const extra = sel.kind === 'photo' ? ` · ${esc(trackOf(r).name)}` : '';
+  bar.innerHTML = `<div class="what"><b>${esc(selName())}</b><span>${kindName} · ${esc(selDate())}${extra}</span></div>
+    <button class="btn sm" type="button" data-nudge="-1" aria-label="One day earlier">◀ Day</button>
+    <button class="btn sm" type="button" data-nudge="1" aria-label="One day later">Day ▶</button>
+    <button class="btn sm primary" type="button" data-edit>Edit</button>
+    <button class="btn sm ghost" type="button" data-close aria-label="Clear selection">Done</button>`;
+  bar.querySelectorAll('[data-nudge]').forEach(b => b.onclick = () => nudge(+b.dataset.nudge));
+  bar.querySelector('[data-edit]').onclick = () => openEditor(sel);
+  bar.querySelector('[data-close]').onclick = () => select(null);
+}
+function renderItems() {
+  const box = $('#items');
+  if (box.hidden) return;
+  const open = new Set([...box.querySelectorAll('details[open]')].map(d => d.dataset.track));
+  const ts = tracksSorted();
+  const photoRow = p => `<div class="list-row"><img class="thumb" alt="" data-pid="${esc(p.id)}"><div class="t"><b>${esc(p.caption || p.name || 'Photo')}</b><span>${esc(showTime(p.t))}</span></div><button class="btn sm" type="button" data-edit="photo:${esc(p.id)}">Edit</button></div>`;
+  let h = `<h3>Tracks</h3><div>`;
+  for (const t of ts) {
+    const ps = doc.photos.filter(p => trackOf(p) === t).sort((a, b) => parseLocal(a.t) - parseLocal(b.t));
+    h += `<div class="list-row"><span class="dot" style="--sw:var(--c-${t.color})"></span><div class="t"><b>${esc(t.name || 'Track')}</b><span>${ps.length} photo${ps.length === 1 ? '' : 's'} · ${t.height ? t.height + ' px tall' : 'automatic height'}</span></div><button class="btn sm" type="button" data-edit="track:${esc(t.id)}">Edit</button></div>`;
+    if (ps.length) h += `<details class="photos" data-track="${esc(t.id)}"${open.has(t.id) ? ' open' : ''}><summary>Show photos</summary>${ps.map(photoRow).join('')}</details>`;
+  }
+  h += `</div>`;
+  if (doc.bands.length) {
+    h += `<h3>Bands</h3><div>` + doc.bands.slice().sort((a, b) => parseLocal(a.start) - parseLocal(b.start)).map(b =>
+      `<div class="list-row"><span class="dot" style="--sw:var(--c-${esc(b.color)})"></span><div class="t"><b>${esc(b.label || 'Band')}</b><span>${esc(showRange(b))}</span></div><button class="btn sm" type="button" data-edit="band:${esc(b.id)}">Edit</button></div>`).join('') + `</div>`;
+  }
+  if (doc.events.length) {
+    h += `<h3>Events</h3><div>` + doc.events.slice().sort((a, b) => parseLocal(a.t) - parseLocal(b.t)).map(e =>
+      `<div class="list-row"><span class="dot" style="--sw:var(--c-${esc(e.color)})"></span><div class="t"><b>${esc(e.label || 'Event')}</b><span>${esc(showDay(e.t))}</span></div><button class="btn sm" type="button" data-edit="event:${esc(e.id)}">Edit</button></div>`).join('') + `</div>`;
+  }
+  box.innerHTML = h;
+  box.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { const [kind, id] = b.dataset.edit.split(':'); openEditor({ kind, id }); });
+  box.querySelectorAll('details').forEach(d => d.addEventListener('toggle', () => { if (d.open) d.querySelectorAll('img[data-pid]').forEach(i => fillThumb(i)); }));
+  box.querySelectorAll('details[open] img[data-pid]').forEach(i => fillThumb(i));
+}
+function fillThumb(el) {
+  const c = imgs.get(el.dataset.pid);
+  if (c && c.url) el.src = c.url;
+  else loadImg(el.dataset.pid).then(() => { el.src = imgs.get(el.dataset.pid).url; }, () => {});
+}
+function fillThumbs(id) { document.querySelectorAll(`img[data-pid="${CSS.escape(id)}"]`).forEach(fillThumb); }
+
+/* ---------- Drawers ---------- */
+let lastFocus = null;
+function openDrawer(title, inner, wire) {
+  lastFocus = document.activeElement;
+  $('#layer').innerHTML = `<div class="scrim" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="${esc(title)}"><button class="x" type="button" data-close aria-label="Close">×</button><h2>${esc(title)}</h2><form class="form" id="dform" onsubmit="return false">${inner}</form></aside>`;
+  $('#layer').querySelectorAll('[data-close]').forEach(b => b.onclick = closeDrawer);
+  const f = $('#dform');
+  wire && wire(f);
+  (f.querySelector('input,select,button') || $('#layer .x')).focus({ preventScroll: true });
+}
+function closeDrawer() {
+  $('#layer').innerHTML = '';
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus({ preventScroll: true });
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#layer').firstChild) closeDrawer(); });
+const swatches = (name, cur) => `<div class="swatches" role="group" aria-label="Color">${COLORS.map(c =>
+  `<button type="button" class="swatch" style="--sw:var(--c-${c})" data-color="${c}" aria-label="${COLOR_NAMES[c]}" aria-pressed="${c === cur}"></button>`).join('')}</div>`;
+function wireSwatches(f, r) {
+  f.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
+    r.color = b.dataset.color; touchRec(r); changed();
+    f.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  });
+}
+/* A delete button that asks for a second tap instead of a browser dialog */
+function wireDelete(btn, label, onDelete) {
+  btn.onclick = () => {
+    if (btn.dataset.armed) { onDelete(); closeDrawer(); return; }
+    btn.dataset.armed = '1'; btn.textContent = label;
+    setTimeout(() => { if (document.contains(btn)) { delete btn.dataset.armed; btn.textContent = 'Delete'; } }, 4000);
+  };
+}
+function bind(f, sel, r, key, fn) {
+  const el = f.querySelector(sel);
+  el.addEventListener('input', () => { const v = fn ? fn(el) : el.value; if (v === undefined) return; r[key] = v; touchRec(r); changed(); });
+  return el;
+}
+function nextColor(list) { const used = list.map(r => r.color); return COLORS.find(c => !used.includes(c)) || COLORS[list.length % COLORS.length]; }
+
+function openEditor(s) {
+  const r = find(KIND[s.kind], s.id);
+  if (!r) return;
+  if (s.kind === 'photo') {
+    const ts = tracksSorted();
+    openDrawer('Photo', `
+      <img class="preview" alt="" data-pid="${esc(r.id)}">
+      <label class="field">Caption<input type="text" id="fCap" value="${esc(r.caption)}" placeholder="${esc(r.name || '')}"></label>
+      <label class="field">Date and time<input type="datetime-local" step="1" id="fT" value="${esc(r.t)}"></label>
+      <p class="note">${r.t === r.taken ? (r.from === 'camera' ? 'This is when the camera says the photo was taken.' : 'The photo had no date from the camera, so this is when the file was last changed.') : `Moved from ${esc(showTime(r.taken))}, when it was ${r.from === 'camera' ? 'taken' : 'last changed'}.`}</p>
+      ${r.t !== r.taken ? `<button class="btn sm" type="button" id="fReset" style="align-self:flex-start">Put it back on its original date</button>` : ''}
+      ${ts.length > 1 ? `<label class="field">Track<select id="fTrack">${ts.map(t => `<option value="${esc(t.id)}"${t === trackOf(r) ? ' selected' : ''}>${esc(t.name || 'Track')}</option>`).join('')}</select></label>` : ''}
+      <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
+      fillThumb(f.querySelector('img'));
+      bind(f, '#fCap', r, 'caption');
+      bind(f, '#fT', r, 't', el => el.value && isFinite(parseLocal(el.value)) ? fmtLocal(parseLocal(el.value), true) : undefined);
+      if (f.querySelector('#fReset')) f.querySelector('#fReset').onclick = () => { r.t = r.taken; touchRec(r); changed(); openEditor(s); };
+      if (f.querySelector('#fTrack')) bind(f, '#fTrack', r, 'track');
+      f.querySelector('[data-close]').onclick = closeDrawer;
+      wireDelete(f.querySelector('#fDel'), 'Tap again to delete', () => { remove('photos', r.id); changed(); toast('Photo deleted'); });
+    });
+  } else if (s.kind === 'band' || s.kind === 'event') {
+    const isBand = s.kind === 'band';
+    openDrawer(isBand ? 'Band' : 'Event', `
+      <label class="field">Label<input type="text" id="fLabel" value="${esc(r.label)}"></label>
+      ${isBand ? `<div class="inline"><label class="field">First day<input type="date" id="fStart" value="${esc(r.start)}"></label><label class="field">Last day<input type="date" id="fEnd" value="${esc(r.end)}"></label></div>`
+        : `<label class="field">Day<input type="date" id="fT" value="${esc(r.t)}"></label>`}
+      <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
+      <p class="note">${isBand ? 'Bands mark a period, like a trip or a season. Drag a band to move it, or drag either end to change its days.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it.'}</p>
+      <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
+      bind(f, '#fLabel', r, 'label');
+      const day = el => el.value && isFinite(parseLocal(el.value)) ? el.value : undefined;
+      if (isBand) {
+        bind(f, '#fStart', r, 'start', el => { const v = day(el); if (v && parseLocal(v) > parseLocal(r.end)) { r.end = v; f.querySelector('#fEnd').value = v; } return v; });
+        bind(f, '#fEnd', r, 'end', el => { const v = day(el); if (v && parseLocal(v) < parseLocal(r.start)) { r.start = v; f.querySelector('#fStart').value = v; } return v; });
+      } else bind(f, '#fT', r, 't', day);
+      wireSwatches(f, r);
+      f.querySelector('[data-close]').onclick = closeDrawer;
+      wireDelete(f.querySelector('#fDel'), 'Tap again to delete', () => { remove(KIND[s.kind], r.id); changed(); });
+    });
+  } else if (s.kind === 'track') {
+    const ts = tracksSorted(), i = ts.indexOf(r), n = doc.photos.filter(p => trackOf(p) === r).length;
+    const auto = !r.height;
+    openDrawer('Track', `
+      <label class="field">Name<input type="text" id="fName" value="${esc(r.name)}"></label>
+      <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
+      <label class="cb"><input type="checkbox" id="fAuto"${auto ? ' checked' : ''}> Size photos to fit the screen</label>
+      <label class="field">Photo height <span class="mono" id="fHval">${trackH(r)} px</span><input type="range" id="fH" min="48" max="360" step="4" value="${trackH(r)}"${auto ? ' disabled' : ''}></label>
+      <label class="field">When photos overlap<select id="fOverlap"><option value="spread"${r.overlap !== 'overlap' ? ' selected' : ''}>Spread them out</option><option value="overlap"${r.overlap === 'overlap' ? ' selected' : ''}>Let them overlap</option></select></label>
+      <div class="row"><button class="btn sm" type="button" id="fUp"${i === 0 ? ' disabled' : ''}>Move up</button><button class="btn sm" type="button" id="fDown"${i === ts.length - 1 ? ' disabled' : ''}>Move down</button></div>
+      <div class="row">${ts.length > 1 ? `<button class="btn danger" type="button" id="fDel">Delete</button>` : ''}<span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>
+      ${ts.length > 1 && n ? `<p class="note">Deleting this track deletes its ${n} photo${n === 1 ? '' : 's'} too.</p>` : ''}`, f => {
+      bind(f, '#fName', r, 'name');
+      wireSwatches(f, r);
+      const range = f.querySelector('#fH'), val = f.querySelector('#fHval');
+      f.querySelector('#fAuto').onchange = e => { r.height = e.target.checked ? null : +range.value; range.disabled = e.target.checked; val.textContent = trackH(r) + ' px'; range.value = trackH(r); touchRec(r); changed(); };
+      range.oninput = () => { r.height = +range.value; val.textContent = r.height + ' px'; touchRec(r); changed(); };
+      bind(f, '#fOverlap', r, 'overlap');
+      const swap = d => { const o = ts[i + d]; [r.order, o.order] = [o.order, r.order]; if (r.order === o.order) r.order += d; touchRec(r); touchRec(o); changed(); openEditor(s); };
+      f.querySelector('#fUp').onclick = () => swap(-1);
+      f.querySelector('#fDown').onclick = () => swap(1);
+      f.querySelector('[data-close]').onclick = closeDrawer;
+      if (f.querySelector('#fDel')) wireDelete(f.querySelector('#fDel'), n ? `Tap again to delete ${n} photo${n === 1 ? '' : 's'}` : 'Tap again to delete', () => {
+        doc.photos.filter(p => trackOf(p) === r).forEach(p => remove('photos', p.id));
+        remove('tracks', r.id); changed();
+      });
+    });
+  }
+}
+
+/* ---------- Toolbar ---------- */
+const pickPhotos = () => $('#photoIn').click();
+$('#addPhotos').onclick = pickPhotos;
+$('#emptyAdd').onclick = pickPhotos;
+$('#photoIn').onchange = e => { const files = [...e.target.files]; e.target.value = ''; addFiles(files); };
+$('#addTrack').onclick = () => {
+  const ts = tracksSorted(), t = { id: uid(), name: `Track ${ts.length + 1}`, color: nextColor(ts), height: null, overlap: 'spread', order: (ts.at(-1)?.order ?? -1) + 1, u: now() };
+  doc.tracks.push(t); changed();
+  $('#trackPick').value = t.id;
+  openEditor({ kind: 'track', id: t.id });
+};
+/* Where a new band or event starts: the selected photo's day, else the day of the photo nearest the middle of
+   the view (the middle itself can be empty space that spread-out photos left behind) */
+function midDay() {
+  const r = sel && sel.kind === 'photo' && selItem();
+  if (r) return nearestDay(parseLocal(r.t));
+  if (!L || $('#tlPanel').hidden) return nearestDay(Date.now());
+  const mid = sc.scrollLeft + sc.clientWidth / 2;
+  let best = null;
+  for (const it of L.photos) if (!best || Math.abs(it.left + it.w / 2 - mid) < Math.abs(best.left + best.w / 2 - mid)) best = it;
+  return nearestDay(best ? parseLocal(best.p.t) : clamp(L.tOf(mid), L.lo, L.hi));
+}
+$('#addBand').onclick = () => {
+  const mid = midDay(), span = L ? Math.max(1, Math.round((L.hi - L.lo) / DAY / 8)) : 3;
+  const b = { id: uid(), label: 'New band', start: fmtLocal(mid - Math.floor(span / 2) * DAY), end: '', color: nextColor(doc.bands), u: now() };
+  b.end = addDays(b.start, span - 1);
+  doc.bands.push(b); changed(); select({ kind: 'band', id: b.id }, false);
+  openEditor({ kind: 'band', id: b.id });
+};
+$('#addEvent').onclick = () => {
+  const e = { id: uid(), label: 'Event', t: fmtLocal(midDay()), color: nextColor(doc.events), u: now() };
+  doc.events.push(e); changed(); select({ kind: 'event', id: e.id }, false);
+  openEditor({ kind: 'event', id: e.id });
+};
+
+/* ---------- Settings and backups ---------- */
+$('#settingsBtn').onclick = () => {
+  const S = doc.settings;
+  openDrawer('Settings', `
+    <label class="field">Title<input type="text" id="sTitle" value="${esc(S.title)}" placeholder="Shown above the timeline"></label>
+    <label class="cb"><input type="checkbox" id="sCap"${S.captions ? ' checked' : ''}> Show captions on photos</label>
+    <label class="cb"><input type="checkbox" id="sDates"${S.dates ? ' checked' : ''}> Show dates on photos</label>
+    <label class="cb"><input type="checkbox" id="sShade"${S.shading ? ' checked' : ''}> Shade bands across the tracks</label>
+    <h3>Your data</h3>
+    <p class="note">Your timeline and photos are kept in this browser only. A backup file holds everything, photos included, so you can move it to another device.</p>
+    <div class="row"><button class="btn" type="button" id="sExport">Export backup</button><button class="btn" type="button" id="sImport">Import backup</button></div>
+    <div class="row"><button class="btn danger" type="button" id="sClear">Start over</button></div>`, f => {
+    const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchSettings(); changed(); });
+    set('#sTitle', 'title', 'value'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading');
+    f.querySelector('#sExport').onclick = exportBackup;
+    f.querySelector('#sImport').onclick = () => $('#backupIn').click();
+    wireDelete(f.querySelector('#sClear'), 'Tap again to delete everything', async () => {
+      const ids = doc.photos.map(p => p.id);
+      for (const id of ids) { forgetImg(id); await idb.del(id).catch(() => {}); }
+      doc = blankDoc(); sel = null; changed(); toast('Started a new timeline');
+    });
+  });
+};
+const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function exportBackup() {
+  toast('Preparing backup…', 60000);
+  const images = {};
+  for (const p of doc.photos) { const b = await idb.get(p.id).catch(() => null); if (b) images[p.id] = await blobToDataURL(b); }
+  download(new Blob([JSON.stringify({ ...doc, images })], { type: 'application/json' }), `Photo Timeline backup ${fmtLocal(Date.now())}.json`);
+  toast('Backup saved');
+}
+$('#backupIn').onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.photos) || !Array.isArray(data.tracks)) throw new Error('shape');
+    for (const [id, url] of Object.entries(data.images || {})) await idb.put(id, await (await fetch(url)).blob());
+    delete data.images;
+    doc = mergeDocs(doc, data);
+    imgs.forEach((v, id) => forgetImg(id));
+    changed(); closeDrawer(); toast('Backup merged in');
+  } catch (err) { toast('That file isn’t a Photo Timeline backup.'); }
+};
+
+/* ---------- Save as image ---------- */
+$('#exportBtn').onclick = () => {
+  if ($('#tlPanel').hidden) return toast('Add some photos first.');
+  const canShare = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([''], 'x.png', { type: 'image/png' })] }));
+  const opt = { width: 'screen', scale: 2, theme: 'light' };
+  try { Object.assign(opt, JSON.parse(localStorage.getItem('photoTimeline.export')) || {}); } catch (e) {}
+  const segBtns = (key, vals) => `<div class="seg" role="group">${vals.map(([v, l]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(opt[key]) === String(v)}">${l}</button>`).join('')}</div>`;
+  openDrawer('Save as image', `
+    <div class="field">Width${segBtns('width', [['screen', 'As on screen'], [1200, '1200'], [1800, '1800'], [2600, '2600']])}</div>
+    <div class="field">Sharpness${segBtns('scale', [[1, '1×'], [2, '2×'], [3, '3×']])}</div>
+    <div class="field">Colors${segBtns('theme', [['light', 'Light'], ['dark', 'Dark'], ['current', 'As on screen']])}</div>
+    <p class="note" id="eSize"></p>
+    <div class="row"><button class="btn primary" type="button" id="eSave">Download PNG</button>${canShare ? '<button class="btn" type="button" id="eShare">Share…</button>' : ''}</div>
+    <figure id="eOut" hidden style="margin:0;display:flex;flex-direction:column;gap:6px"><img class="preview" alt="The saved timeline image"><figcaption class="note">If the download doesn’t start, right-click or long-press the image to save it.</figcaption></figure>`, f => {
+    const show = b => { const out = f.querySelector('#eOut'), img = out.querySelector('img'); if (img.src) URL.revokeObjectURL(img.src); img.src = URL.createObjectURL(b); out.hidden = false; };
+    const update = () => {
+      const r = exportPlan(opt);
+      f.querySelector('#eSize').textContent = `${r.pw} × ${r.ph} pixels${r.scale < opt.scale ? ' (reduced to fit the largest image this browser can make)' : ''}.`;
+    };
+    f.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+      opt[b.dataset.k] = isNaN(+b.dataset.v) ? b.dataset.v : +b.dataset.v;
+      f.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      try { localStorage.setItem('photoTimeline.export', JSON.stringify(opt)); } catch (e) {}
+      update();
+    });
+    update();
+    const name = () => `${(doc.settings.title || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline'}.png`;
+    f.querySelector('#eSave').onclick = async () => { const b = await renderImage(opt); if (b) { show(b); download(b, name()); toast('Image saved'); } };
+    if (canShare) f.querySelector('#eShare').onclick = async () => {
+      const b = await renderImage(opt);
+      if (!b) return;
+      show(b);
+      try { await navigator.share({ files: [new File([b], name(), { type: 'image/png' })], title: doc.settings.title || 'Photo timeline' }); }
+      catch (err) { if (err.name !== 'AbortError') download(b, name()); }
+    };
+  });
+};
+function exportPlan(opt) {
+  const L2 = layout(opt.width === 'screen' ? sc.clientWidth : opt.width, null);
+  // Keep under the largest canvas phones can make (16.7 million pixels on iOS) and 16384 pixels a side
+  const scale = Math.min(opt.scale, 16384 / L2.W, 16384 / L2.H, Math.sqrt(16.7e6 / (L2.W * L2.H)));
+  return { L: L2, scale, pw: Math.round(L2.W * scale), ph: Math.round(L2.H * scale) };
+}
+async function renderImage(opt) {
+  toast('Drawing image…', 60000);
+  try {
+    await document.fonts.ready;
+    const images = new Map();
+    await Promise.all(doc.photos.map(p => loadImg(p.id).then(img => images.set(p.id, img), () => {})));
+    const { L: L2, scale, pw, ph } = exportPlan(opt);
+    const c = document.createElement('canvas');
+    c.width = pw; c.height = ph;
+    const ctx = c.getContext('2d');
+    ctx.scale(scale, scale);
+    draw(ctx, L2, { k: tokensFor(opt.theme), ox: 0, vw: L2.W, screen: false, images });
+    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+    if (!blob) throw new Error('encode');
+    toast('', 0);
+    return blob;
+  } catch (e) { toast('Couldn’t make the image. Try a smaller width or sharpness.'); return null; }
+}
+
+/* ---------- Toast ---------- */
+let toastTimer;
+function toast(msg, ms = 2600) {
+  clearTimeout(toastTimer);
+  let t = $('.toast');
+  if (!msg) { t && t.remove(); return; }
+  if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.textContent = msg;
+  toastTimer = setTimeout(() => t.remove(), ms);
+}
+
+K = readTokens();
+renderUI();
+requestDraw();
+document.fonts && document.fonts.ready.then(() => requestDraw());
+addEventListener('storage', e => { if (e.key === KEY) { doc = load(); changed(); } });
+</script>
+<script src="https://petravanta.github.io/general/shared/hub-link.js" defer></script>
+<script src="https://petravanta.github.io/general/shared/theme-switch.js" defer></script>
+</body>
+</html>
