@@ -174,7 +174,10 @@ input[type=range]{accent-color:var(--accent);width:100%}
 /* Crop: the photo at its own shape, with a frame that drags; outside the frame is dimmed */
 .crop{position:relative;align-self:center;max-width:100%;overflow:hidden;border-radius:8px;background:var(--sunk);touch-action:none;user-select:none;-webkit-user-select:none}
 .crop img{display:block;width:100%;height:100%;pointer-events:none}
-.crop .frame{position:absolute;box-shadow:0 0 0 9999px rgba(0,0,0,.55);outline:2px solid #fff;cursor:move}
+.cropper{position:sticky;top:0;z-index:1;margin:-4px -4px 0;padding:4px;background:var(--surface);display:flex;gap:12px;align-items:flex-end;justify-content:center}
+.cropper .result{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;color:var(--muted)}
+.cropper canvas{border-radius:4px;background:var(--sunk);box-shadow:0 0 0 1px var(--line)}
+.crop .frame{position:absolute;box-shadow:0 0 0 9999px rgba(0,0,0,.38);outline:2px solid #fff;cursor:move}
 .crop .frame:focus-visible{outline:3px solid var(--accent)}
 /* Corner handles sit just inside the frame so the photo's edge never clips them */
 .crop .h{position:absolute;width:30px;height:30px}
@@ -1430,7 +1433,15 @@ function wireCrop(f, r) {
   const box = f.querySelector('.crop'), fr = box.querySelector('.frame'), shape = f.querySelector('#fShape'), un = f.querySelector('#fUncrop');
   const pa = (r.w || 4) / (r.h || 3);   // the photo's own shape
   let c = { ...(r.crop || { x: 0, y: 0, w: 1, h: 1 }) }, ratio = null;
-  const show = () => Object.assign(fr.style, { left: c.x * 100 + '%', top: c.y * 100 + '%', width: c.w * 100 + '%', height: c.h * 100 + '%' });
+  // A small picture of the tile as it will look, kept up to date while the frame moves
+  const cv = f.querySelector('.cropper canvas'), g = cv.getContext('2d'), dpr = devicePixelRatio || 1;
+  const preview = () => {
+    const img = getImg(r.id);
+    const a = clamp(pa * c.w / c.h, 0.5, 2.2), W = a >= 1 ? 80 : Math.round(80 * a), H = a >= 1 ? Math.round(80 / a) : 80;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px'; cv.width = W * dpr; cv.height = H * dpr;
+    if (img) drawPhoto(g, { left: 0, top: 0, w: W * dpr, h: H * dpr, p: { ...r, crop: c, caption: '' } }, K, { images: new Map([[r.id, img]]) });
+  };
+  const show = () => { Object.assign(fr.style, { left: c.x * 100 + '%', top: c.y * 100 + '%', width: c.w * 100 + '%', height: c.h * 100 + '%' }); preview(); };
   const save = () => {
     const whole = c.x < 0.002 && c.y < 0.002 && c.w > 0.996 && c.h > 0.996;
     if (whole) delete r.crop; else r.crop = { x: +c.x.toFixed(4), y: +c.y.toFixed(4), w: +c.w.toFixed(4), h: +c.h.toFixed(4) };
@@ -1449,6 +1460,7 @@ function wireCrop(f, r) {
     c = { x: mx - w / 2, y: my - h / 2, w, h };
     keep();
   };
+  loadImg(r.id).then(preview, () => {});
   shape.onchange = () => { ratio = shape.value === 'free' ? null : +shape.value; if (ratio) { fitShape(); show(); save(); } };
   un.onclick = () => { c = { x: 0, y: 0, w: 1, h: 1 }; shape.value = 'free'; ratio = null; show(); save(); };
   let d = null;
@@ -1496,7 +1508,7 @@ function openEditor(s) {
   if (s.kind === 'photo') {
     const ts = tracksSorted();
     openDrawer('Photo', `
-      <div class="crop" style="aspect-ratio:${r.w || 4}/${r.h || 3};width:min(100%, ${Math.round(260 * (r.w || 4) / (r.h || 3))}px)"><img alt="" data-pid="${esc(r.id)}"><div class="frame" tabindex="0" role="group" aria-label="Crop frame. Arrow keys move it, Shift and arrow keys resize it."><span class="h" data-c="nw"></span><span class="h" data-c="ne"></span><span class="h" data-c="sw"></span><span class="h" data-c="se"></span></div></div>
+      <div class="cropper"><div class="crop" style="aspect-ratio:${r.w || 4}/${r.h || 3};width:min(calc(100% - 92px), ${Math.round(240 * (r.w || 4) / (r.h || 3))}px, ${(34 * (r.w || 4) / (r.h || 3)).toFixed(2)}vh)"><img alt="" data-pid="${esc(r.id)}"><div class="frame" tabindex="0" role="group" aria-label="Crop frame. Arrow keys move it, Shift and arrow keys resize it."><span class="h" data-c="nw"></span><span class="h" data-c="ne"></span><span class="h" data-c="sw"></span><span class="h" data-c="se"></span></div></div><div class="result"><canvas width="80" height="80" aria-hidden="true"></canvas>On the timeline</div></div>
       <div class="row"><label class="field grow">Crop<select id="fShape">${CROPS.map(([v, n]) => `<option value="${v}">${n}</option>`).join('')}</select></label><button class="btn sm" type="button" id="fUncrop"${r.crop ? '' : ' disabled'}>Show whole photo</button></div>
       <label class="field">Caption<input type="text" id="fCap" value="${esc(r.caption)}" placeholder="${esc(r.name || '')}"></label>
       <label class="field">Date and time<input type="datetime-local" step="1" id="fT" value="${esc(r.t)}"></label>
