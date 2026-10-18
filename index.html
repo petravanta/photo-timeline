@@ -183,6 +183,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
 <main class="wrap stack">
   <div class="toolbar">
     <button class="btn primary" id="addPhotos" type="button">Add photos</button>
+    <button class="btn" id="addGoogle" type="button">From Google Photos</button>
     <label class="sr-only" for="trackPick">Add photos to track</label>
     <select id="trackPick" hidden></select>
     <button class="btn" id="addTrack" type="button">+ Track</button>
@@ -196,8 +197,8 @@ input[type=range]{accent-color:var(--accent);width:100%}
   <section class="panel hero" id="empty" hidden>
     <h2>Lay your photos out in time</h2>
     <p>Add photos and they line up by the date they were taken. Drag them to another day or another track, mark periods with bands and special days with events, then save the whole timeline as an image.</p>
-    <button class="btn primary big" id="emptyAdd" type="button">Add photos</button>
-    <p class="small">Photos stay on this device. Nothing is uploaded.</p>
+    <div class="row"><button class="btn primary big" id="emptyAdd" type="button">Add photos</button><button class="btn big" id="emptyGoogle" type="button">From Google Photos</button></div>
+    <p class="small">Photos stay on this device. Nothing is uploaded, and photos from Google Photos are copied in.</p>
   </section>
 
   <section class="panel tl-panel" id="tlPanel" hidden>
@@ -457,16 +458,125 @@ async function addFiles(files, trackId) {
     try {
       const exif = await exifDate(f);
       const taken = exif || fmtLocal(f.lastModified || Date.now(), true);
-      const { blob, w, h } = await shrink(f);
-      const id = uid();
-      await idb.put(id, blob);
-      doc.photos.push({ id, timeline: cur().id, track: trackId, t: taken, taken, from: exif ? 'camera' : 'file', caption: '', name: f.name, w, h, u: now() });
+      await storePhoto(f, { taken, from: exif ? 'camera' : 'file', name: f.name }, trackId);
       added++;
-      changed();
     } catch (e) { bad.push(f.name); }
   }
   if (bad.length) toast(`Added ${added}. Couldn’t read ${bad.length === 1 ? bad[0] : bad.length + ' files'}; this browser may not open that format.`, 6000);
   else toast(added === 1 ? 'Photo added' : `${added} photos added`);
+}
+
+async function storePhoto(file, meta, trackId) {
+  const { blob, w, h } = await shrink(file);
+  const id = uid();
+  await idb.put(id, blob);
+  doc.photos.push({ id, timeline: cur().id, track: trackId, t: meta.taken, taken: meta.taken, from: meta.from, caption: '', name: meta.name, w, h, u: now() });
+  changed();
+}
+
+/* ---------- Google Photos: Google's own picker, through the shared OAuth client for petravanta.github.io ----------
+   Since 2025 the Photos Picker API is the only way an app may browse someone's library. The app opens a picking
+   session, sends the person to Google's picker (the Photos app on a phone), waits until they finish, then
+   downloads the chosen photos at the size the app stores them. Nothing about the library is kept. */
+const GOOGLE_CLIENT_ID = '326863468616-4hf2conk0ks0s4qdva9tphphdo7ht7eh.apps.googleusercontent.com';
+const PICKER_API = 'https://photospicker.googleapis.com/v1';
+const GPhotos = { token: null, exp: 0, session: null, cancelled: false };
+function loadGis() {
+  return new Promise((res, rej) => {
+    if (window.google && google.accounts && google.accounts.oauth2) return res();
+    const sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client'; sc.onload = res; sc.onerror = () => rej(new Error('gis'));
+    document.head.appendChild(sc);
+  });
+}
+function gphotosToken() {
+  return new Promise(async (res, rej) => {
+    if (GPhotos.token && Date.now() < GPhotos.exp) return res();
+    try { await loadGis(); } catch (e) { return rej(e); }
+    google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID, scope: 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
+      callback: r => { if (r.error) return rej(r); GPhotos.token = r.access_token; GPhotos.exp = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000; res(); },
+      error_callback: rej
+    }).requestAccessToken();
+  });
+}
+async function gfetch(url, opt = {}) {
+  const r = await fetch(url.startsWith('http') ? url : PICKER_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + GPhotos.token } });
+  if (r.status === 401) { GPhotos.token = null; throw new Error('expired'); }
+  if (!r.ok) throw new Error('http ' + r.status);
+  return r;
+}
+const secs = d => parseFloat(d) || 0;   // durations come as "5s"
+async function fromGooglePhotos() {
+  try { await gphotosToken(); }
+  catch (e) { return toast(e && e.type === 'popup_closed' ? 'Google sign-in was closed.' : 'Couldn’t sign in to Google. Check that pop-ups are allowed for this site.', 5000); }
+  const trackId = $('#trackPick').value || tracksSorted()[0].id;
+  openDrawer('From Google Photos', `
+    <p id="gStep">Open Google Photos, pick the photos you want, then tap <b>Done</b> there. They’ll appear on <b>${esc(cur().name)}</b> at the dates Google Photos has for them.</p>
+    <div class="row"><button class="btn primary" type="button" id="gOpen">Open Google Photos</button><a class="btn" id="gLink" target="_blank" rel="noopener" hidden>Open Google Photos</a></div>
+    <p class="note">The app gets only the photos you pick, copied into this browser. It can’t see the rest of your library.</p>
+    <div class="row"><span class="grow"></span><button class="btn ghost" type="button" data-close>Cancel</button></div>`, f => {
+    f.querySelector('[data-close]').onclick = () => { GPhotos.cancelled = true; closeDrawer(); };
+    f.querySelector('#gOpen').onclick = async () => {
+      // Open the window inside the tap so it isn't blocked, then point it at the picker
+      const w = window.open('', '_blank');
+      const step = f.querySelector('#gStep');
+      try {
+        const sess = await (await gfetch('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        GPhotos.session = sess; GPhotos.cancelled = false;
+        const uri = sess.pickerUri + '/autoclose';
+        if (w) w.location.href = uri;
+        else { const a = f.querySelector('#gLink'); a.href = uri; a.hidden = false; f.querySelector('#gOpen').hidden = true; }
+        step.textContent = 'Waiting for you to finish picking in Google Photos…';
+        const items = await waitForPicks(sess);
+        if (!items) return;
+        closeDrawer();
+        await importPicks(items, trackId);
+      } catch (e) {
+        if (w && !w.closed) w.close();
+        step.textContent = e.message === 'expired' ? 'Your Google sign-in ran out. Close this and try again.' : 'Google Photos didn’t answer. Close this and try again.';
+      }
+    };
+  });
+}
+async function waitForPicks(sess) {
+  const every = Math.max(2, secs(sess.pollingConfig?.pollInterval) || 3) * 1000;
+  const until = Date.now() + (secs(sess.pollingConfig?.timeoutIn) || 1800) * 1000;
+  while (Date.now() < until && !GPhotos.cancelled) {
+    await new Promise(r => setTimeout(r, every));
+    if (GPhotos.cancelled) break;
+    const s = await (await gfetch('/sessions/' + sess.id)).json();
+    if (s.mediaItemsSet) {
+      const items = [];
+      let page = '';
+      do {
+        const j = await (await gfetch(`/mediaItems?sessionId=${encodeURIComponent(sess.id)}&pageSize=100${page ? '&pageToken=' + encodeURIComponent(page) : ''}`)).json();
+        items.push(...(j.mediaItems || []));
+        page = j.nextPageToken;
+      } while (page);
+      return items;
+    }
+  }
+  gfetch('/sessions/' + sess.id, { method: 'DELETE' }).catch(() => {});
+  return null;
+}
+async function importPicks(items, trackId) {
+  const photos = items.filter(it => it.type !== 'VIDEO' && it.mediaFile && it.mediaFile.baseUrl);
+  if (!photos.length) return toast('No photos were picked. Videos can’t go on a timeline yet.');
+  let added = 0, bad = 0;
+  for (const [i, it] of photos.entries()) {
+    toast(`Copying photo ${i + 1} of ${photos.length} from Google Photos…`, 60000);
+    try {
+      const blob = await (await gfetch(`${it.mediaFile.baseUrl}=w${MAX_SIDE}-h${MAX_SIDE}`)).blob();
+      const t = Date.parse(it.createTime);
+      await storePhoto(blob, { taken: fmtLocal(isFinite(t) ? t : Date.now(), true), from: 'google', name: it.mediaFile.filename || 'Google Photos' }, trackId);
+      added++;
+    } catch (e) { bad++; }
+  }
+  gfetch('/sessions/' + GPhotos.session.id, { method: 'DELETE' }).catch(() => {});
+  if (bad && !added) toast('Google Photos wouldn’t let this page download the photos. Nothing was added.', 7000);
+  else if (bad) toast(`Added ${added}. ${bad} couldn’t be downloaded from Google Photos.`, 6000);
+  else toast(added === 1 ? 'Photo added from Google Photos' : `${added} photos added from Google Photos`);
 }
 
 /* ---------- Layout: where everything goes, in CSS pixels. Independent of scrolling ---------- */
@@ -1132,7 +1242,7 @@ function openEditor(s) {
       <img class="preview" alt="" data-pid="${esc(r.id)}">
       <label class="field">Caption<input type="text" id="fCap" value="${esc(r.caption)}" placeholder="${esc(r.name || '')}"></label>
       <label class="field">Date and time<input type="datetime-local" step="1" id="fT" value="${esc(r.t)}"></label>
-      <p class="note">${r.t === r.taken ? (r.from === 'camera' ? 'This is when the camera says the photo was taken.' : 'The photo had no date from the camera, so this is when the file was last changed.') : `Moved from ${esc(showTime(r.taken))}, when it was ${r.from === 'camera' ? 'taken' : 'last changed'}.`}</p>
+      <p class="note">${r.t === r.taken ? { camera: 'This is when the camera says the photo was taken.', google: 'This is when Google Photos says the photo was taken.' }[r.from] || 'The photo had no date from the camera, so this is when the file was last changed.' : `Moved from ${esc(showTime(r.taken))}, when it was ${r.from === 'file' ? 'last changed' : 'taken'}.`}</p>
       ${r.t !== r.taken ? `<button class="btn sm" type="button" id="fReset" style="align-self:flex-start">Put it back on its original date</button>` : ''}
       ${ts.length > 1 ? `<label class="field">Track<select id="fTrack">${ts.map(t => `<option value="${esc(t.id)}"${t === trackOf(r) ? ' selected' : ''}>${esc(t.name || 'Track')}</option>`).join('')}</select></label>` : ''}
       <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
@@ -1195,6 +1305,8 @@ function openEditor(s) {
 
 /* ---------- Toolbar ---------- */
 const pickPhotos = () => $('#photoIn').click();
+$('#addGoogle').onclick = fromGooglePhotos;
+$('#emptyGoogle').onclick = fromGooglePhotos;
 $('#addPhotos').onclick = pickPhotos;
 $('#emptyAdd').onclick = pickPhotos;
 $('#photoIn').onchange = e => { const files = [...e.target.files]; e.target.value = ''; addFiles(files); };
