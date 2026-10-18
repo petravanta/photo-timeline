@@ -13,6 +13,7 @@ Lay photos out on a timeline by the date they were taken, mark periods with Gant
 
 ## What it does
 
+- **As many timelines as you like.** The picker in the header switches between them; *+ New timeline* starts another (a trip, a year, a child's first years). Each has its own name, tracks, photos, bands and events, and its own display settings under *Settings*, where you can also delete it.
 - **One or more photo tracks.** **+ Track** adds another row, for a different person, camera or theme. Each track has its own name, color and photo height, and can spread overlapping photos apart or let them overlap.
 - **Fits the screen.** By default photos are sized so the tracks share the window's height and a crowded track shrinks until its photos fit across. The time axis fits the width, and its labels switch between hours, days, months and years as you zoom. Photos that would overlap are spread out around their dates, and a stem joins each one to its exact date.
 - **Keyboard and screen readers.** Select something on the timeline and use the arrow keys to move it (Shift for a week, up and down for another track) and Enter to edit it. Everything on the timeline is also listed under it, with an Edit button.
@@ -20,7 +21,7 @@ Lay photos out on a timeline by the date they were taken, mark periods with Gant
 
 ## Your data
 
-Nothing is uploaded. The timeline is kept in your browser (`localStorage`) and the photos in its IndexedDB, shrunk to 1600 pixels on the longest side. **Settings → Export backup** downloads everything, photos included, as one JSON file, and **Import backup** merges one back in, following the *User data* section of the shared standards. Google Drive sync is not built yet.
+Nothing is uploaded. The timeline is kept in your browser (`localStorage`) and the photos in its IndexedDB, shrunk to 1600 pixels on the longest side. **Settings → Export backup** downloads every timeline, photos included, as one JSON file, and **Import backup** merges one back in, following the *User data* section of the shared standards. Google Drive sync is not built yet.
 
 ## Running it
 
