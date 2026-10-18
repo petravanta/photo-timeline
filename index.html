@@ -866,6 +866,21 @@ function rr(ctx, x, y, w, h, r) {
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
+// Breaks text into at most n lines at spaces; the last line keeps the rest and is trimmed by fit() when drawn
+function wrap(ctx, s, max, n) {
+  const out = [];
+  let rest = s.trim();
+  while (out.length < n - 1 && ctx.measureText(rest).width > max) {
+    const words = rest.split(/\s+/);
+    let line = words[0], i = 1;
+    while (i < words.length && ctx.measureText(line + ' ' + words[i]).width <= max) line += ' ' + words[i++];
+    if (i === words.length) break;   // a single word too long for the line: fit() trims it
+    out.push(line);
+    rest = words.slice(i).join(' ');
+  }
+  out.push(rest);
+  return out;
+}
 function fit(ctx, s, max) {
   if (ctx.measureText(s).width <= max) return s;
   let lo = 0, hi = s.length;
@@ -1018,12 +1033,14 @@ function drawPhoto(ctx, it, k, o) {
     ctx.drawImage(img, sx, sy, sw, sh, left, top, w, h);
   }
   const lines = [];
-  if (S.captions && p.caption) lines.push(p.caption);
+  ctx.font = font(600, 12);
+  // A caption that doesn't fit wraps to a second line when the photo is tall enough to spare it
+  if (S.captions && p.caption) lines.push(...wrap(ctx, p.caption, w - 12, h >= 80 ? 2 : 1));
   if (S.dates) lines.push(F.dmy.format(parseLocal(p.t)));
   if (lines.length && w >= 56 && h >= 48) {
     const sh = 8 + lines.length * 15;
     ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(left, top + h - sh, w, sh);
-    ctx.fillStyle = '#fff'; ctx.font = font(600, 12);
+    ctx.fillStyle = '#fff';
     lines.forEach((s, i) => ctx.fillText(fit(ctx, s, w - 12), left + 6, top + h - sh + 16 + i * 15));
   }
   if (st.mat) { ctx.strokeStyle = k.surface; ctx.lineWidth = st.mat * 2; ctx.strokeRect(left, top, w, h); }   // a mount around the photo
