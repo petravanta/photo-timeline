@@ -319,6 +319,24 @@ const F = {
 };
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
+/* Age labels: how long after the timeline's start date a photo was taken, as an age, a week or a day count */
+function ageLabel(from, t, as) {
+  const a = parseLocal(from), b = startOfDay(parseLocal(t)), before = b < a;
+  const d = Math.round(Math.abs(b - a) / DAY);
+  if (as === 'days') return before ? `${d} day${d === 1 ? '' : 's'} before` : `Day ${d + 1}`;
+  if (as === 'weeks') return before ? `${Math.ceil(d / 7)} wk before` : `Week ${Math.floor(d / 7) + 1}`;
+  const [s, e] = before ? [b, a] : [a, b], x = new Date(s), z = new Date(e);
+  let m = (z.getFullYear() - x.getFullYear()) * 12 + z.getMonth() - x.getMonth();
+  if (z.getDate() < x.getDate()) m--;
+  const y = Math.floor(m / 12), mo = m % 12;
+  const txt = y ? `${y} yr${y === 1 ? '' : 's'}${mo ? ` ${mo} mo` : ''}` : m ? `${m} mo` : d < 14 ? `${d} day${d === 1 ? '' : 's'}` : `${Math.floor(d / 7)} wk`;
+  return before ? `${txt} before` : txt;
+}
+// A skipped stretch's length, short enough for under the axis: "8 mo", "3 yrs"
+function gapLabel(ms) {
+  const d = ms / DAY;
+  return d < 60 ? `${Math.round(d)} d` : d < 730 ? `${Math.round(d / 30.44)} mo` : `${Math.round(d / 365.25)} yrs`;
+}
 // How long a band runs, counting its last day: "12 days", "3 months, 4 days", "2 years, 1 month"
 function duration(b) {
   const a = new Date(parseLocal(b.start)), z = new Date(bandEnd(b));
@@ -345,7 +363,7 @@ function blankTrack(timeline, order = 0, color = 'teal', name = 'Photos') {
 }
 function blankTimeline(name) {
   const t = now();
-  return { id: uid(), name, style: 'vivid', showName: true, zoom: 1, captions: true, dates: false, shading: true, created: t, u: t };
+  return { id: uid(), name, style: 'vivid', skipGaps: true, showName: true, zoom: 1, captions: true, dates: false, shading: true, created: t, u: t };
 }
 function blankDoc() {
   const tl = blankTimeline('My timeline');
@@ -714,6 +732,24 @@ function stack(items, max, give = 0) {
   return Math.max(1, rows.length);
 }
 
+/* Long stretches with nothing in them, to squeeze on the axis: the longest first, while each is still more
+   than a fifth of what's left to show. A little time is kept either side so photos near the edge have room. */
+const BREAK_W = 26;
+function emptyStretches(times, lo, hi) {
+  const ts = times.filter(isFinite).sort((a, b) => a - b), gaps = [];
+  for (let i = 1; i < ts.length; i++) if (ts[i] > ts[i - 1]) gaps.push([ts[i - 1], ts[i]]);
+  gaps.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]));
+  let shown = hi - lo;
+  const out = [];
+  for (const [a, b] of gaps) {
+    if (b - a < 0.2 * (shown - (b - a)) || b - a < 3 * DAY) break;
+    shown -= b - a;
+    out.push([a, b]);
+  }
+  const keep = Math.max(DAY / 2, shown * 0.04);
+  return out.map(([a, b]) => [a + Math.min(keep, (b - a) / 4), b - Math.min(keep, (b - a) / 4)]).sort((a, b) => a[0] - b[0]);
+}
+
 function layout(viewW, frozen, shift = 0) {
   const S = cur(), tracks = tracksSorted(), photos = mine('photos'), bands = mine('bands'), events = mine('events');
   let lo = Infinity, hi = -Infinity;
@@ -730,12 +766,25 @@ function layout(viewW, frozen, shift = 0) {
   const L = { viewW, tracks: [], photos: [], bands: [], events: [], lo, hi };
   if (frozen) Object.assign(L, frozen);
   else {
-    L.ppd = Math.max(1e-4, (viewW - 2 * PADX - 2 * edge) / ((hi - lo) / DAY)) * (S.zoom || 1);
+    const skips = S.skipGaps ? emptyStretches([...photos.map(p => parseLocal(p.t)), ...bands.flatMap(b => [parseLocal(b.start), bandEnd(b)]), ...events.map(e => parseLocal(e.t))], lo, hi) : [];
+    const shown = hi - lo - skips.reduce((a, [c0, c1]) => a + c1 - c0, 0);
+    L.ppd = Math.max(1e-4, (viewW - 2 * PADX - 2 * edge - skips.length * BREAK_W) / (shown / DAY)) * (S.zoom || 1);
     L.t0 = lo;
     L.X0 = PADX + edge + shift;
+    // The time scale is piecewise: ordinary stretches at ppd, each skipped stretch squeezed into BREAK_W pixels
+    L.segs = [];
+    let t = lo, x = L.X0;
+    for (const [c0, c1] of skips) {
+      L.segs.push({ t, x, k: L.ppd / DAY });
+      x += (c0 - t) * L.ppd / DAY;
+      L.segs.push({ t: c0, x, k: BREAK_W / (c1 - c0), skip: true, t1: c1 });
+      x += BREAK_W; t = c1;
+    }
+    L.segs.push({ t, x, k: L.ppd / DAY });
   }
-  const xOf = L.xOf = t => L.X0 + (t - L.t0) / DAY * L.ppd;
-  L.tOf = x => L.t0 + (x - L.X0) / L.ppd * DAY;
+  const segAt = (key, v) => { let s = L.segs[0]; for (const g of L.segs) if (g[key] <= v) s = g; return s; };
+  const xOf = L.xOf = t => { const g = segAt('t', t); return g.x + (t - g.t) * g.k; };
+  L.tOf = x => { const g = segAt('x', x); return g.t + (x - g.x) / g.k; };
 
   let y = PADY, minX = Infinity, maxX = xOf(hi) + edge;
   if (S.showName && S.name) { L.titleY = y + 20; y += 40; }
@@ -821,6 +870,16 @@ function stepTo(d, [u, n]) {
   if (u === 'w') d.setDate(d.getDate() + 7 * n);
   if (u === 'M') d.setMonth(d.getMonth() + n);
   if (u === 'y') d.setFullYear(d.getFullYear() + n);
+}
+// Ticks for each ordinary stretch in view, so a skipped stretch gets none and each side starts with a full date
+function visTicks(L, xa, xb) {
+  const out = [];
+  L.segs.forEach((g, i) => {
+    if (g.skip) return;
+    const next = L.segs[i + 1], ga = Math.max(xa, i ? g.x : -Infinity), gb = Math.min(xb, next ? next.x : Infinity);
+    if (ga < gb) out.push(...ticks(L.tOf(ga), next ? Math.min(L.tOf(gb), next.t - 1) : L.tOf(gb), L.ppd));
+  });
+  return out;
 }
 function ticks(from, to, ppd) {
   const unit = pickUnit(ppd), out = [];
@@ -908,12 +967,16 @@ function draw(ctx, L, o) {
     ctx.fillRect(it.left, L.tracksTop, it.right - it.left, L.tracksBottom - L.tracksTop);
   }
   // Grid
-  const tk = ticks(L.tOf(x0 - 80), L.tOf(x1 + 80), L.ppd);
+  const tk = visTicks(L, x0 - 80, x1 + 80);
   ctx.lineWidth = 1;
   for (const t of tk) {
     const x = Math.round(L.xOf(t.t)) + 0.5;
     ctx.strokeStyle = rgba(k.line, (t.major ? 1 : 0.6) * st.grid);
     ctx.beginPath(); ctx.moveTo(x, L.tracksTop); ctx.lineTo(x, L.axisY); ctx.stroke();
+  }
+  // Skipped stretches: a soft band down the tracks
+  for (const g of L.segs) if (g.skip && vis(g.x, g.x + BREAK_W)) {
+    ctx.fillStyle = rgba(k.line, 0.35); ctx.fillRect(g.x + 6, L.tracksTop, BREAK_W - 12, L.axisY - L.tracksTop);
   }
   // Tracks: separators and baselines
   for (const T of L.tracks) {
@@ -989,9 +1052,18 @@ function draw(ctx, L, o) {
     ctx.fillStyle = col;
     ctx.beginPath(); ctx.moveTo(it.x, L.axisY - 5); ctx.lineTo(it.x + 5, L.axisY); ctx.lineTo(it.x, L.axisY + 5); ctx.lineTo(it.x - 5, L.axisY); ctx.fill();
   }
-  // Axis
+  // Axis, broken where an empty stretch is skipped
   ctx.strokeStyle = k.muted; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(x0, L.axisY + 0.5); ctx.lineTo(x1, L.axisY + 0.5); ctx.stroke();
+  for (const g of L.segs) {
+    if (!g.skip || !vis(g.x, g.x + BREAK_W)) continue;
+    const a = g.x + 8, b = g.x + BREAK_W - 8, y = L.axisY + 0.5;
+    ctx.fillStyle = k.surface; ctx.fillRect(a, y - 6, b - a, 12);
+    ctx.beginPath(); ctx.moveTo(a - 3, y + 6); ctx.lineTo(a + 3, y - 6); ctx.moveTo(b - 3, y + 6); ctx.lineTo(b + 3, y - 6); ctx.stroke();
+    ctx.font = font(500, 11); ctx.textAlign = 'center';
+    ctx.fillStyle = k.muted; ctx.fillText(gapLabel(g.t1 - g.t), g.x + BREAK_W / 2, L.axisY + 34);
+    ctx.textAlign = 'left';
+  }
   ctx.font = font(500, 12); ctx.fillStyle = k.muted; ctx.textAlign = 'center';
   let lastR = -Infinity;
   for (const t of tk) {
@@ -1037,6 +1109,7 @@ function drawPhoto(ctx, it, k, o) {
   // A caption that doesn't fit wraps to a second line when the photo is tall enough to spare it
   if (S.captions && p.caption) lines.push(...wrap(ctx, p.caption, w - 12, h >= 80 ? 2 : 1));
   if (S.dates) lines.push(F.dmy.format(parseLocal(p.t)));
+  if (S.ageFrom && S.ageAs) lines.push(ageLabel(S.ageFrom, p.t, S.ageAs));
   if (lines.length && w >= 56 && h >= 48) {
     const sh = 8 + lines.length * 15;
     ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(left, top + h - sh, w, sh);
@@ -1167,7 +1240,7 @@ function startDrag() {
   drag.orig = { ...r };
   // Dragging one of several selected photos moves them all between tracks and leaves their dates alone
   if (drag.hit.kind === 'photo' && group.has(r.id)) drag.group = new Map(groupPhotos().map(g => [g.id, g.track]));
-  frozen = { ppd: L.ppd, t0: L.t0, X0: L.X0 };
+  frozen = { ppd: L.ppd, t0: L.t0, X0: L.X0, segs: L.segs };
   if (!isSel(drag.hit.kind, drag.hit.id)) select(drag.hit, false);
 }
 cv.addEventListener('pointermove', e => {
@@ -1188,18 +1261,19 @@ cv.addEventListener('pointermove', e => {
 // Stop the page from scrolling while a finger is moving an item
 cv.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefault(); }, { passive: false });
 function applyDrag(dxPx, y) {
-  const r = selItem(), o = drag.orig, days = dxPx / L.ppd;
+  const r = selItem(), o = drag.orig;
   if (!r) return;
+  const moved = t => L.tOf(L.xOf(t) + dxPx);   // through the time scale, which can skip empty stretches
   if (drag.group) {
     const T = trackAt(y);
     if (T) for (const g of groupPhotos()) g.track = T.tr.id;
   } else if (sel.kind === 'photo') {
-    r.t = fmtLocal(parseLocal(o.t) + days * DAY, true);
+    r.t = fmtLocal(moved(parseLocal(o.t)), true);
     const T = trackAt(y);
     if (T) r.track = T.tr.id;
-  } else if (sel.kind === 'event') r.t = fmtLocal(nearestDay(parseLocal(o.t) + days * DAY));
+  } else if (sel.kind === 'event') r.t = fmtLocal(nearestDay(moved(parseLocal(o.t))));
   else {
-    const n = Math.round(days), part = drag.hit.part;
+    const part = drag.hit.part, at = parseLocal(part === 'end' ? o.end : o.start), n = Math.round((moved(at) - at) / DAY);
     if (part === 'body') { r.start = addDays(o.start, n); r.end = addDays(o.end, n); }
     else if (part === 'start') r.start = parseLocal(addDays(o.start, n)) > parseLocal(lastDay(o)) ? lastDay(o) : addDays(o.start, n);
     else r.end = parseLocal(addDays(o.end, n)) < parseLocal(o.start) ? o.start : addDays(o.end, n);
@@ -1654,6 +1728,10 @@ function openSettings() {
     <label class="cb"><input type="checkbox" id="sCap"${S.captions ? ' checked' : ''}> Show captions on photos</label>
     <label class="cb"><input type="checkbox" id="sDates"${S.dates ? ' checked' : ''}> Show dates on photos</label>
     <label class="cb"><input type="checkbox" id="sShade"${S.shading ? ' checked' : ''}> Shade bands across the tracks</label>
+    <label class="cb"><input type="checkbox" id="sGaps"${S.skipGaps ? ' checked' : ''}> Squeeze long empty stretches on the time line</label>
+    <div class="inline"><label class="field">Age or count on photos<select id="sAgeAs"><option value="">Off</option>${[['age', 'Age (2 yrs 3 mo)'], ['weeks', 'Week number'], ['days', 'Day number']].map(([v, n]) => `<option value="${v}"${S.ageAs === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+    <label class="field">Counting from<input type="date" id="sAgeFrom" value="${esc(S.ageFrom || '')}"></label></div>
+    <p class="note">For a birthday, a first day or a start date. Each photo shows how long after it was taken.</p>
     <label class="cb"><input type="checkbox" id="sCredit"${S.credit !== false ? ' checked' : ''}> Add a small “Generated with Photo Timeline” line under saved images</label>
     <div class="row"><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
     <h3>Your data</h3>
@@ -1662,7 +1740,7 @@ function openSettings() {
     const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchTimeline(); changed(); });
     set('#sStyle', 'style', 'value');
     f.querySelector('#sStyle').addEventListener('input', () => { f.querySelector('#sStyleNote').textContent = look().note; });
-    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sCredit', 'credit');
+    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sAgeAs', 'ageAs', 'value'); set('#sAgeFrom', 'ageFrom', 'value'); set('#sCredit', 'credit');
     f.querySelector('#sExport').onclick = exportBackup;
     f.querySelector('#sImport').onclick = () => $('#backupIn').click();
     wireDelete(f.querySelector('#sDel'), n ? `Tap again to delete it and its ${n} photo${n === 1 ? '' : 's'}` : 'Tap again to delete it', () => deleteTimeline(S));
