@@ -268,7 +268,9 @@ function fmtLocal(ms, withTime) {
 const startOfDay = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
 const nearestDay = ms => startOfDay(ms + DAY / 2);
 function addDays(s, n) { const d = new Date(parseLocal(s)); d.setDate(d.getDate() + n); return fmtLocal(d.getTime()); }
-const bandEnd = b => parseLocal(addDays(b.end, 1));   // a band's end day is included
+/* A band marked ongoing runs to today, whatever day that is; its stored end is kept for when it's switched off */
+const lastDay = b => b.ongoing ? fmtLocal(Math.max(startOfDay(Date.now()), parseLocal(b.start))) : b.end;
+const bandEnd = b => parseLocal(addDays(lastDay(b), 1));   // a band's last day is included
 const F = {
   dm: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }),
   dmy: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }),
@@ -280,7 +282,10 @@ const F = {
 };
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
-function showRange(b) { return b.start === b.end ? showDay(b.start) : `${showDay(b.start)} – ${showDay(b.end)}`; }
+function showRange(b) {
+  if (b.ongoing) return `${showDay(b.start)} – now`;
+  return b.start === b.end ? showDay(b.start) : `${showDay(b.start)} – ${showDay(b.end)}`;
+}
 
 /* ---------- Document ---------- */
 /* Version 2 holds several timelines. Tracks, photos, bands and events each name the timeline they belong to, and
@@ -686,7 +691,7 @@ function layout(viewW, frozen, shift = 0) {
       .sort((a, b) => a.left - b.left || b.right - a.right);
     for (const it of bs) {
       it.labelW = Math.ceil(measure.measureText(it.b.label || 'Band').width) + 22;
-      const end = Math.max(it.right, it.left + it.labelW);
+      const end = Math.max(it.right + (it.b.ongoing ? 10 : 0), it.left + it.labelW);
       let lane = lanes.findIndex(r => r + GAP < it.left);
       if (lane < 0) { lane = lanes.length; lanes.push(0); }
       lanes[lane] = end;
@@ -870,6 +875,10 @@ function draw(ctx, L, o) {
     ctx.save(); rr(ctx, it.left, it.y, w, it.h, 5); ctx.clip();
     ctx.fillStyle = col; ctx.fillRect(it.left, it.y, 4, it.h);
     ctx.restore();
+    if (it.b.ongoing) {   // still going: an arrow past today's end
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(it.right + 2, it.y + 3); ctx.lineTo(it.right + 9, it.y + it.h / 2); ctx.lineTo(it.right + 2, it.y + it.h - 3); ctx.fill();
+    }
     if (o.screen && isSel('band', it.b.id)) { ctx.strokeStyle = k.ink; ctx.lineWidth = 2; rr(ctx, it.left - 2, it.y - 2, w + 4, it.h + 4, 7); ctx.stroke(); ctx.lineWidth = 1; }
     ctx.font = font(600, 12); ctx.fillStyle = k.ink;
     let lx = it.left + 11;
@@ -986,7 +995,8 @@ function hitTest(x, y, touch) {
   for (const it of L.bands) {
     if (y < it.y - 2 || y > it.y + it.h + 2 || x < it.left - edge || x > Math.max(it.right, it.left + it.labelW) + edge) continue;
     const wide = it.right - it.left > 3 * edge;
-    const part = wide && Math.abs(x - it.left) <= edge ? 'start' : Math.abs(x - it.right) <= edge ? 'end' : 'body';
+    let part = wide && Math.abs(x - it.left) <= edge ? 'start' : Math.abs(x - it.right) <= edge ? 'end' : 'body';
+    if (it.b.ongoing && part !== 'start') part = 'start';   // its end is today, so only the start moves
     return { kind: 'band', id: it.b.id, part };
   }
   for (const T of L.tracks) if (y >= T.y && y < T.y + HEAD && x < sc.scrollLeft + PADX + 280) return { kind: 'track', id: T.tr.id };
@@ -1061,7 +1071,7 @@ function applyDrag(dxPx, y) {
   else {
     const n = Math.round(days), part = drag.hit.part;
     if (part === 'body') { r.start = addDays(o.start, n); r.end = addDays(o.end, n); }
-    else if (part === 'start') r.start = parseLocal(addDays(o.start, n)) > parseLocal(o.end) ? o.end : addDays(o.start, n);
+    else if (part === 'start') r.start = parseLocal(addDays(o.start, n)) > parseLocal(lastDay(o)) ? lastDay(o) : addDays(o.start, n);
     else r.end = parseLocal(addDays(o.end, n)) < parseLocal(o.start) ? o.start : addDays(o.end, n);
   }
   requestDraw();
@@ -1109,6 +1119,7 @@ function nudge(days) {
   if (!r) return;
   if (sel.kind === 'photo') { const d = new Date(parseLocal(r.t)); d.setDate(d.getDate() + days); r.t = fmtLocal(d.getTime(), true); }
   else if (sel.kind === 'event') r.t = addDays(r.t, days);
+  else if (r.ongoing) { const v = addDays(r.start, days); if (parseLocal(v) <= parseLocal(lastDay(r))) r.start = v; }
   else { r.start = addDays(r.start, days); r.end = addDays(r.end, days); }
   touchRec(r); changed();
   $('#live').textContent = `${selName()} moved to ${selDate()}`;
@@ -1298,16 +1309,24 @@ function openEditor(s) {
     const isBand = s.kind === 'band';
     openDrawer(isBand ? 'Band' : 'Event', `
       <label class="field">Label<input type="text" id="fLabel" value="${esc(r.label)}"></label>
-      ${isBand ? `<div class="inline"><label class="field">First day<input type="date" id="fStart" value="${esc(r.start)}"></label><label class="field">Last day<input type="date" id="fEnd" value="${esc(r.end)}"></label></div>`
+      ${isBand ? `<div class="inline"><label class="field">First day<input type="date" id="fStart" value="${esc(r.start)}"></label><label class="field">Last day<input type="date" id="fEnd" value="${esc(r.end)}"${r.ongoing ? ' disabled' : ''}></label></div>
+      <label class="cb"><input type="checkbox" id="fOngoing"${r.ongoing ? ' checked' : ''}> Still going: the last day is always today</label>`
         : `<label class="field">Day<input type="date" id="fT" value="${esc(r.t)}"></label>`}
       <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
-      <p class="note">${isBand ? 'Bands mark a period, like a trip or a season. Drag a band to move it, or drag either end to change its days.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it.'}</p>
+      <p class="note">${isBand ? 'Bands mark a period, like a trip, a season or a job. Drag a band to move it, or drag either end to change its days. A band that is still going stretches to today and drags by its first day.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it.'}</p>
       <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
       bind(f, '#fLabel', r, 'label');
       const day = el => el.value && isFinite(parseLocal(el.value)) ? el.value : undefined;
       if (isBand) {
         bind(f, '#fStart', r, 'start', el => { const v = day(el); if (v && parseLocal(v) > parseLocal(r.end)) { r.end = v; f.querySelector('#fEnd').value = v; } return v; });
         bind(f, '#fEnd', r, 'end', el => { const v = day(el); if (v && parseLocal(v) < parseLocal(r.start)) { r.start = v; f.querySelector('#fStart').value = v; } return v; });
+        f.querySelector('#fOngoing').onchange = e => {
+          r.ongoing = e.target.checked;
+          const end = f.querySelector('#fEnd');
+          end.disabled = r.ongoing;
+          if (!r.ongoing && parseLocal(r.end) < parseLocal(r.start)) { r.end = lastDay({ ...r, ongoing: true }); end.value = r.end; }
+          touchRec(r); changed();
+        };
       } else bind(f, '#fT', r, 't', day);
       wireSwatches(f, r);
       f.querySelector('[data-close]').onclick = closeDrawer;
