@@ -503,8 +503,21 @@ function gphotosToken() {
 async function gfetch(url, opt = {}) {
   const r = await fetch(url.startsWith('http') ? url : PICKER_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + GPhotos.token } });
   if (r.status === 401) { GPhotos.token = null; throw new Error('expired'); }
-  if (!r.ok) throw new Error('http ' + r.status);
+  if (!r.ok) {
+    // Keep Google's own reason so the person can see what to change
+    const j = await r.json().catch(() => ({})), err = j.error || {};
+    const reason = (err.details || []).map(d => d.reason).find(Boolean) || err.status || '';
+    if (/SCOPE_INSUFFICIENT/.test(reason)) GPhotos.token = null;
+    throw Object.assign(new Error(err.message || 'HTTP ' + r.status), { reason, status: r.status });
+  }
   return r;
+}
+function googleProblem(e) {
+  if (e.message === 'expired') return 'Your Google sign-in ran out. Close this and try again.';
+  if (e.reason === 'SERVICE_DISABLED' || /has not been used|is disabled/i.test(e.message)) return 'The Google Photos Picker API isn’t turned on yet for the Google Cloud project behind this app’s sign-in. Turn it on there, wait a few minutes, then try again.';
+  if (/SCOPE_INSUFFICIENT/.test(e.reason || '')) return 'The Google sign-in didn’t include access to Google Photos. Close this, try again, and tick the Google Photos box when Google asks.';
+  if (e instanceof TypeError) return 'This browser couldn’t reach Google Photos. Check your connection and try again.';
+  return `Google Photos said: ${e.message}${e.status ? ` (${e.status})` : ''}`;
 }
 const secs = d => parseFloat(d) || 0;   // durations come as "5s"
 async function fromGooglePhotos() {
@@ -534,7 +547,7 @@ async function fromGooglePhotos() {
         await importPicks(items, trackId);
       } catch (e) {
         if (w && !w.closed) w.close();
-        step.textContent = e.message === 'expired' ? 'Your Google sign-in ran out. Close this and try again.' : 'Google Photos didn’t answer. Close this and try again.';
+        step.textContent = googleProblem(e);
       }
     };
   });
