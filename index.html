@@ -1111,7 +1111,7 @@ function drawPhoto(ctx, it, k, o) {
   if (S.captions && p.caption) lines.push(...wrap(ctx, p.caption, w - 12, h >= 80 ? 2 : 1));
   if (S.dates) lines.push(F.dmy.format(parseLocal(p.t)));
   if (S.ageFrom && S.ageAs) lines.push(ageLabel(S.ageFrom, p.t, S.ageAs));
-  if (lines.length && w >= 56 && h >= 48) {
+  if (lines.length && w >= 56 && h >= 48 && !o.plain) {
     const sh = 8 + lines.length * 15;
     ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(left, top + h - sh, w, sh);
     ctx.fillStyle = '#fff';
@@ -1406,8 +1406,8 @@ function renderUI() {
   pick.innerHTML = ts.map(t => `<option value="${esc(t.id)}">to ${esc(t.name || 'Track')}</option>`).join('');
   if (ts.some(t => t.id === cur)) pick.value = cur;
   $('#hint').textContent = coarse.matches
-    ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away. Tap Select more to move several photos at once.'
-    : 'Drop photos anywhere to add them, onto a track to put them there. Drag photos to a new date or track. Shift-click to select several and move them together. Double-click anything to edit it. Ctrl + scroll zooms.';
+    ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away. Tap Select more to move several photos at once, or pick two for a before and after.'
+    : 'Drop photos anywhere to add them, onto a track to put them there. Drag photos to a new date or track. Shift-click to select several and move them together, or two for a before and after. Double-click anything to edit it. Ctrl + scroll zooms.';
   if (group.size) { group = new Set(groupPhotos().map(r => r.id)); if (group.size < 2) group = new Set(); }
   if (sel && !selItem()) sel = group.size ? { kind: 'photo', id: [...group].pop() } : null;
   if (!sel) picking = false;
@@ -1425,13 +1425,14 @@ function renderSelbar() {
   const wire = () => {
     bar.querySelector('[data-move]')?.addEventListener('change', e => { if (e.target.value) moveGroup(e.target.value); });
     bar.querySelector('[data-reset]')?.addEventListener('click', resetDates);
+    bar.querySelector('[data-ba]')?.addEventListener('click', () => openBeforeAfter(groupPhotos()));
     bar.querySelector('[data-more]')?.addEventListener('click', () => { picking = !picking; renderSelbar(); $('#live').textContent = picking ? 'Tap photos to add them to the selection' : ''; });
     bar.querySelector('[data-close]').onclick = () => select(null);
   };
   if (group.size) {
     const ps = groupPhotos(), names = [...new Set(ps.map(p => trackOf(p).name || 'Track'))];
     bar.innerHTML = `<div class="what"><b>${ps.length} photos</b><span>${esc(names.length > 2 ? names.length + ' tracks' : names.join(', '))}${picking ? ' · tap photos to add or remove' : ''}</span></div>
-      ${moveTo()}${ps.some(p => p.t !== p.taken) ? '<button class="btn sm" type="button" data-reset>Reset dates</button>' : ''}${more}
+      ${ps.length === 2 ? '<button class="btn sm primary" type="button" data-ba>Before &amp; after</button>' : ''}${moveTo()}${ps.some(p => p.t !== p.taken) ? '<button class="btn sm" type="button" data-reset>Reset dates</button>' : ''}${more}
       <button class="btn sm ghost" type="button" data-close aria-label="Clear selection">Done</button>`;
     return wire();
   }
@@ -1871,6 +1872,62 @@ $('#exportBtn').onclick = () => {
     };
   });
 };
+/* ---------- Before and after: two photos side by side or stacked, cut to the same shape, with the time between ---------- */
+function openBeforeAfter(ps) {
+  const [a, b] = ps.slice().sort((x, y) => parseLocal(x.t) - parseLocal(y.t));
+  const opt = { stack: innerWidth < innerHeight, shape: 'first', theme: 'light' };
+  const segBtns = (key, vals) => `<div class="seg" role="group">${vals.map(([v, l]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(opt[key]) === String(v)}">${l}</button>`).join('')}</div>`;
+  openDrawer('Before & after', `
+    <img class="preview" id="baImg" alt="Before and after preview" style="max-height:340px">
+    <div class="field">Layout${segBtns('stack', [[false, 'Side by side'], [true, 'Stacked']])}</div>
+    <div class="field">Both photos${segBtns('shape', [['first', 'As first'], ['1', 'Square'], ['0.8', '4:5'], ['1.5', '3:2']])}</div>
+    <div class="field">Colors${segBtns('theme', [['light', 'Light'], ['dark', 'Dark']])}</div>
+    <div class="row"><button class="btn primary" type="button" id="baSave">Download PNG</button>${navigator.canShare ? '<button class="btn" type="button" id="baShare">Share…</button>' : ''}</div>`, async f => {
+    let blob = null;
+    const update = async () => { blob = await beforeAfter(a, b, opt); const img = f.querySelector('#baImg'); if (img.src) URL.revokeObjectURL(img.src); img.src = URL.createObjectURL(blob); };
+    f.querySelectorAll('[data-k]').forEach(btn => btn.onclick = () => {
+      const v = btn.dataset.v;
+      opt[btn.dataset.k] = v === 'true' ? true : v === 'false' ? false : v;
+      f.querySelectorAll(`[data-k="${btn.dataset.k}"]`).forEach(x => x.setAttribute('aria-pressed', String(x === btn)));
+      update();
+    });
+    const name = `${(cur().name || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline'} before and after.png`;
+    f.querySelector('#baSave').onclick = () => { if (blob) { download(blob, name); toast('Image saved'); } };
+    f.querySelector('#baShare')?.addEventListener('click', async () => {
+      try { await navigator.share({ files: [new File([blob], name, { type: 'image/png' })] }); } catch (err) { if (err.name !== 'AbortError') download(blob, name); }
+    });
+    await update();
+  });
+}
+async function beforeAfter(a, b, opt) {
+  await document.fonts.ready;
+  const [ia, ib] = await Promise.all([loadImg(a.id), loadImg(b.id)].map(p => p.catch(() => null)));
+  const k = tokensFor(opt.theme), S = cur(), W = 1080, pad = 40, gap = 24;
+  const ar = opt.shape === 'first' ? aspect(a) : +opt.shape;
+  const tw = opt.stack ? W - 2 * pad : (W - 2 * pad - gap) / 2, th = Math.round(tw / ar);
+  const head = 96, label = 64, credit = S.credit !== false ? CREDIT_H + 8 : 0;
+  const H = opt.stack ? head + 2 * (th + label) + gap + pad + credit : head + th + label + pad + credit;
+  const c = document.createElement('canvas'), sc2 = 2;
+  c.width = W * sc2; c.height = H * sc2;
+  const ctx = c.getContext('2d');
+  ctx.scale(sc2, sc2);
+  ctx.fillStyle = k.surface; ctx.fillRect(0, 0, W, H);
+  // The time between, as the headline
+  const later = ageLabel(a.t.slice(0, 10), b.t, 'age');
+  ctx.textAlign = 'center'; ctx.fillStyle = k.ink;
+  ctx.font = look().serif ? font(400, 34, SERIF) : font(600, 32, k.fDisplay);
+  ctx.fillText(later === '0 days' ? 'The same day' : `${later} later`, W / 2, 62);
+  ctx.textAlign = 'left';
+  [[a, ia], [b, ib]].forEach(([p, img], i) => {
+    const x = opt.stack ? pad : pad + i * (tw + gap), y = opt.stack ? head + i * (th + label + gap) : head;
+    drawPhoto(ctx, { left: x, top: y, w: tw, h: th, p }, k, { images: new Map([[p.id, img]]), plain: true });
+    ctx.fillStyle = k.ink; ctx.font = font(600, 20);
+    ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), tw), x, y + th + 30);
+    if (p.caption) { ctx.fillStyle = k.muted; ctx.font = font(500, 17); ctx.fillText(fit(ctx, p.caption, tw), x, y + th + 54); }
+  });
+  if (credit) { ctx.font = font(500, 13); ctx.fillStyle = k.muted; ctx.textAlign = 'right'; ctx.fillText(CREDIT, W - pad, H - 14); }
+  return new Promise(res => c.toBlob(res, 'image/png'));
+}
 const CREDIT = 'Generated with https://petravanta.github.io/photo-timeline/', CREDIT_H = 18;
 
 // Where to cut the timeline into n pieces: each near an even share of what's left, at a spot no photo or event
