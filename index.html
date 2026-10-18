@@ -117,6 +117,13 @@ textarea{resize:vertical}
 :root{--c-teal:#0e7c6f;--c-indigo:#4f46c8;--c-pink:#c2306f;--c-orange:#c2410c;--c-blue:#1d6fb8;--c-green:#2e7d32;--c-amber:#9a6200;--c-slate:#566771}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--c-teal:#3cc3ad;--c-indigo:#9d95ff;--c-pink:#f0679f;--c-orange:#fb8a4c;--c-blue:#6cb4ff;--c-green:#6fd39a;--c-amber:#e6a33a;--c-slate:#9fb0ba}}
 :root[data-theme="dark"]{--c-teal:#3cc3ad;--c-indigo:#9d95ff;--c-pink:#f0679f;--c-orange:#fb8a4c;--c-blue:#6cb4ff;--c-green:#6fd39a;--c-amber:#e6a33a;--c-slate:#9fb0ba}
+/* Timeline styles swap the picker colors (data-style on the root, set from the open timeline) */
+:root[data-style="elegant"]{--c-teal:#5f7f78;--c-indigo:#6b6f8f;--c-pink:#9c6f7c;--c-orange:#a1765a;--c-blue:#5d7690;--c-green:#6c7c58;--c-amber:#93804f;--c-slate:#727272}
+@media (prefers-color-scheme: dark){:root[data-style="elegant"]:not([data-theme="light"]){--c-teal:#9db8b1;--c-indigo:#a7aac6;--c-pink:#d0a6b2;--c-orange:#d3ab90;--c-blue:#9fb4cb;--c-green:#a9b893;--c-amber:#cdb98a;--c-slate:#a8a8a8}}
+:root[data-style="elegant"][data-theme="dark"]{--c-teal:#9db8b1;--c-indigo:#a7aac6;--c-pink:#d0a6b2;--c-orange:#d3ab90;--c-blue:#9fb4cb;--c-green:#a9b893;--c-amber:#cdb98a;--c-slate:#a8a8a8}
+:root[data-style="mono"]{--c-teal:#2e2e2e;--c-indigo:#4d4d4d;--c-pink:#666666;--c-orange:#5a5a5a;--c-blue:#3d3d3d;--c-green:#737373;--c-amber:#555555;--c-slate:#7a7a7a}
+@media (prefers-color-scheme: dark){:root[data-style="mono"]:not([data-theme="light"]){--c-teal:#e4e4e4;--c-indigo:#c6c6c6;--c-pink:#a9a9a9;--c-orange:#b8b8b8;--c-blue:#d6d6d6;--c-green:#9a9a9a;--c-amber:#bdbdbd;--c-slate:#929292}}
+:root[data-style="mono"][data-theme="dark"]{--c-teal:#e4e4e4;--c-indigo:#c6c6c6;--c-pink:#a9a9a9;--c-orange:#b8b8b8;--c-blue:#d6d6d6;--c-green:#9a9a9a;--c-amber:#bdbdbd;--c-slate:#929292}
 
 .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .toolbar .grow,.row .grow{flex:1 1 0}
@@ -243,6 +250,21 @@ const KEY = 'photoTimeline.data';
 const DAY = 864e5;
 const MAX_SIDE = 1600;           // longest side a photo is stored at
 const COLORS = ['teal', 'indigo', 'pink', 'orange', 'blue', 'green', 'amber', 'slate'];
+/* Timeline styles: the colors come from CSS (data-style), the shapes from here */
+const SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
+const STYLES = {
+  vivid: { name: 'Vivid', note: 'Bold track colors and rounded photos.', stem: 1.5, dot: 4, base: 2, baseA: 0.45, radius: 6, bandA: 0.2, bar: 4, grid: 1, mat: 0 },
+  elegant: { name: 'Elegant', note: 'Soft muted tones, fine lines, framed photos and a serif title.', stem: 1, dot: 2.5, base: 1, baseA: 0.6, radius: 1, bandA: 0.12, bar: 2, grid: 0.5, mat: 4, serif: true },
+  mono: { name: 'Monochrome', note: 'Shades of gray only, so the photos carry the color.', stem: 1, dot: 3, base: 1, baseA: 0.6, radius: 2, bandA: 0.1, bar: 2, grid: 0.6, mat: 0 }
+};
+const look = () => STYLES[cur().style] || STYLES.vivid;
+// Point the CSS at the open timeline's style and reread the colors when it changes
+function applyStyle() {
+  const r = document.documentElement, s = STYLES[cur().style] ? cur().style : 'vivid';
+  if (r.dataset.style === s) return;
+  r.dataset.style = s;
+  K = readTokens();
+}
 const COLOR_NAMES = { teal: 'Teal', indigo: 'Indigo', pink: 'Pink', orange: 'Orange', blue: 'Blue', green: 'Green', amber: 'Amber', slate: 'Slate' };
 // Canvas layout, in CSS pixels
 const PADX = 16, PADY = 14, GAP = 6, HEAD = 26, STEM = 18, TRACK_FOOT = 10, AXIS = 36, EV_LANE = 28, BAND_LANE = 30;
@@ -282,6 +304,18 @@ const F = {
 };
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
+// How long a band runs, counting its last day: "12 days", "3 months, 4 days", "2 years, 1 month"
+function duration(b) {
+  const a = new Date(parseLocal(b.start)), z = new Date(bandEnd(b));
+  let m = (z.getFullYear() - a.getFullYear()) * 12 + z.getMonth() - a.getMonth();
+  const at = n => new Date(a.getFullYear(), a.getMonth() + n, Math.min(a.getDate(), new Date(a.getFullYear(), a.getMonth() + n + 1, 0).getDate()));
+  if (at(m) > z) m--;
+  const d = Math.round((z - at(m)) / DAY), y = Math.floor(m / 12), mo = m % 12;
+  const n = (v, w) => v ? `${v} ${w}${v === 1 ? '' : 's'}` : '';
+  if (!m) return n(d, 'day');
+  return (y ? [n(y, 'year'), n(mo, 'month')] : [n(mo, 'month'), n(d, 'day')]).filter(Boolean).join(', ');
+}
+const bandLabel = b => (b.label || 'Band') + (b.showDuration ? ` · ${duration(b)}${b.ongoing ? ' so far' : ''}` : '');
 function showRange(b) {
   if (b.ongoing) return `${showDay(b.start)} – now`;
   return b.start === b.end ? showDay(b.start) : `${showDay(b.start)} – ${showDay(b.end)}`;
@@ -296,7 +330,7 @@ function blankTrack(timeline, order = 0, color = 'teal', name = 'Photos') {
 }
 function blankTimeline(name) {
   const t = now();
-  return { id: uid(), name, showName: true, zoom: 1, captions: true, dates: false, shading: true, created: t, u: t };
+  return { id: uid(), name, style: 'vivid', showName: true, zoom: 1, captions: true, dates: false, shading: true, created: t, u: t };
 }
 function blankDoc() {
   const tl = blankTimeline('My timeline');
@@ -691,7 +725,7 @@ function layout(viewW, frozen, shift = 0) {
     const bs = bands.map(b => { const left = xOf(parseLocal(b.start)), right = Math.max(left + 4, xOf(bandEnd(b))); return { b, left, right }; })
       .sort((a, b) => a.left - b.left || b.right - a.right);
     for (const it of bs) {
-      it.labelW = Math.ceil(measure.measureText(it.b.label || 'Band').width) + 22;
+      it.labelW = Math.ceil(measure.measureText(bandLabel(it.b)).width) + 22;
       const end = Math.max(it.right + (it.b.ongoing ? 10 : 0), it.left + it.labelW);
       let lane = lanes.findIndex(r => r + GAP < it.left);
       if (lane < 0) { lane = lanes.length; lanes.push(0); }
@@ -803,7 +837,7 @@ const isSel = (kind, id) => (sel && sel.kind === kind && sel.id === id) || (kind
 
 /* o: { k: tokens, ox: left edge of what is drawn, vw: width drawn, screen: true on screen (sticky labels, selection) } */
 function draw(ctx, L, o) {
-  const k = o.k, S = cur(), x0 = o.ox, x1 = o.ox + o.vw;
+  const k = o.k, S = cur(), st = look(), x0 = o.ox, x1 = o.ox + o.vw;
   const vis = (l, r) => r >= x0 - 4 && l <= x1 + 4;
   const stickyX = o.screen ? x0 + PADX : PADX;
   ctx.save();
@@ -823,14 +857,14 @@ function draw(ctx, L, o) {
   ctx.lineWidth = 1;
   for (const t of tk) {
     const x = Math.round(L.xOf(t.t)) + 0.5;
-    ctx.strokeStyle = rgba(k.line, t.major ? 1 : 0.6);
+    ctx.strokeStyle = rgba(k.line, (t.major ? 1 : 0.6) * st.grid);
     ctx.beginPath(); ctx.moveTo(x, L.tracksTop); ctx.lineTo(x, L.axisY); ctx.stroke();
   }
   // Tracks: separators and baselines
   for (const T of L.tracks) {
     const col = k.c[T.tr.color];
     if (T !== L.tracks[0]) { ctx.strokeStyle = k.line; ctx.beginPath(); ctx.moveTo(x0, T.y + 0.5); ctx.lineTo(x1, T.y + 0.5); ctx.stroke(); }
-    ctx.strokeStyle = rgba(col, 0.45); ctx.lineWidth = 2;
+    ctx.strokeStyle = rgba(col, st.baseA); ctx.lineWidth = st.base;
     ctx.beginPath(); ctx.moveTo(x0, T.base); ctx.lineTo(x1, T.base); ctx.stroke();
     ctx.lineWidth = 1;
   }
@@ -844,10 +878,10 @@ function draw(ctx, L, o) {
   for (const it of L.photos) {
     if (!vis(Math.min(it.left, it.ax), Math.max(it.left + it.w, it.ax))) continue;
     const col = k.c[it.T.tr.color];
-    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = col; ctx.lineWidth = st.stem;
     ctx.beginPath(); ctx.moveTo(it.left + it.w / 2, it.top + it.h); ctx.lineTo(it.ax, it.T.base); ctx.stroke();
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(it.ax, it.T.base, 4, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(it.ax, it.T.base, st.dot, 0, 7); ctx.fill();
   }
   const dragged = [];
   for (const it of L.photos) {
@@ -872,10 +906,10 @@ function draw(ctx, L, o) {
   for (const it of L.bands) {
     if (!vis(it.left, Math.max(it.right, it.left + it.labelW))) continue;
     const col = k.c[it.b.color] || k.accent, w = it.right - it.left;
-    ctx.fillStyle = rgba(col, 0.2);
-    rr(ctx, it.left, it.y, w, it.h, 5); ctx.fill();
-    ctx.save(); rr(ctx, it.left, it.y, w, it.h, 5); ctx.clip();
-    ctx.fillStyle = col; ctx.fillRect(it.left, it.y, 4, it.h);
+    ctx.fillStyle = rgba(col, st.bandA);
+    rr(ctx, it.left, it.y, w, it.h, Math.min(5, st.radius + 2)); ctx.fill();
+    ctx.save(); rr(ctx, it.left, it.y, w, it.h, Math.min(5, st.radius + 2)); ctx.clip();
+    ctx.fillStyle = col; ctx.fillRect(it.left, it.y, st.bar, it.h);
     ctx.restore();
     if (it.b.ongoing) {   // still going: an arrow past today's end
       ctx.fillStyle = col;
@@ -885,7 +919,7 @@ function draw(ctx, L, o) {
     ctx.font = font(600, 12); ctx.fillStyle = k.ink;
     let lx = it.left + 11;
     if (o.screen && lx < stickyX && it.right - it.labelW > stickyX) lx = stickyX;   // keep the label in view
-    ctx.fillText(it.b.label || 'Band', lx, it.y + it.h / 2 + 4);
+    ctx.fillText(bandLabel(it.b), lx, it.y + it.h / 2 + 4);
   }
   // Events: a flag with a dashed line down to the axis, under the photos
   for (const it of L.events) {
@@ -914,7 +948,7 @@ function draw(ctx, L, o) {
   ctx.textAlign = 'left';
   // Title
   if (S.showName && S.name) {
-    ctx.font = font(500, 20, k.fDisplay); ctx.fillStyle = k.ink;
+    ctx.font = st.serif ? font(400, 24, SERIF) : font(500, 20, k.fDisplay); ctx.fillStyle = k.ink;
     ctx.fillText(fit(ctx, S.name, o.vw - 2 * PADX), stickyX, L.titleY);
   }
   // While dragging, show where the item will land
@@ -929,10 +963,10 @@ function draw(ctx, L, o) {
   ctx.restore();
 }
 function drawPhoto(ctx, it, k, o) {
-  const { left, top, w, h, p } = it, S = cur();
+  const { left, top, w, h, p } = it, S = cur(), st = look(), rad = st.radius;
   const img = o.images ? o.images.get(p.id) : getImg(p.id);
   ctx.save();
-  rr(ctx, left, top, w, h, 6);
+  rr(ctx, left, top, w, h, rad);
   ctx.fillStyle = k.sunk; ctx.fill();
   ctx.clip();
   if (img) {
@@ -951,10 +985,11 @@ function drawPhoto(ctx, it, k, o) {
     ctx.fillStyle = '#fff'; ctx.font = font(600, 12);
     lines.forEach((s, i) => ctx.fillText(fit(ctx, s, w - 12), left + 6, top + h - sh + 16 + i * 15));
   }
+  if (st.mat) { ctx.strokeStyle = k.surface; ctx.lineWidth = st.mat * 2; ctx.strokeRect(left, top, w, h); }   // a mount around the photo
   ctx.restore();
   ctx.strokeStyle = rgba(k.ink, 0.18); ctx.lineWidth = 1;
-  rr(ctx, left + 0.5, top + 0.5, w - 1, h - 1, 6); ctx.stroke();
-  if (o.screen && isSel('photo', p.id)) { ctx.strokeStyle = k.accent; ctx.lineWidth = 3; rr(ctx, left - 2.5, top - 2.5, w + 5, h + 5, 8); ctx.stroke(); }
+  rr(ctx, left + 0.5, top + 0.5, w - 1, h - 1, rad); ctx.stroke();
+  if (o.screen && isSel('photo', p.id)) { ctx.strokeStyle = k.accent; ctx.lineWidth = 3; rr(ctx, left - 2.5, top - 2.5, w + 5, h + 5, rad + 2); ctx.stroke(); }
 }
 
 /* ---------- Screen canvas ---------- */
@@ -1226,6 +1261,7 @@ document.addEventListener('drop', e => {
 /* ---------- Page UI ---------- */
 function changed() { save(); requestDraw(); renderUI(); }
 function renderUI() {
+  applyStyle();
   const any = mine('photos').length || mine('bands').length || mine('events').length;
   renderPicker();
   const wasHidden = $('#tlPanel').hidden;
@@ -1294,7 +1330,7 @@ function renderItems() {
   h += `</div>`;
   if (mine('bands').length) {
     h += `<h3>Bands</h3><div>` + mine('bands').sort((a, b) => parseLocal(a.start) - parseLocal(b.start)).map(b =>
-      `<div class="list-row"><span class="dot" style="--sw:var(--c-${esc(b.color)})"></span><div class="t"><b>${esc(b.label || 'Band')}</b><span>${esc(showRange(b))}</span></div><button class="btn sm" type="button" data-edit="band:${esc(b.id)}">Edit</button></div>`).join('') + `</div>`;
+      `<div class="list-row"><span class="dot" style="--sw:var(--c-${esc(b.color)})"></span><div class="t"><b>${esc(b.label || 'Band')}</b><span>${esc(showRange(b))} · ${esc(duration(b))}</span></div><button class="btn sm" type="button" data-edit="band:${esc(b.id)}">Edit</button></div>`).join('') + `</div>`;
   }
   if (mine('events').length) {
     h += `<h3>Events</h3><div>` + mine('events').sort((a, b) => parseLocal(a.t) - parseLocal(b.t)).map(e =>
@@ -1376,7 +1412,8 @@ function openEditor(s) {
     openDrawer(isBand ? 'Band' : 'Event', `
       <label class="field">Label<input type="text" id="fLabel" value="${esc(r.label)}"></label>
       ${isBand ? `<div class="inline"><label class="field">First day<input type="date" id="fStart" value="${esc(r.start)}"></label><label class="field">Last day<input type="date" id="fEnd" value="${esc(r.end)}"${r.ongoing ? ' disabled' : ''}></label></div>
-      <label class="cb"><input type="checkbox" id="fOngoing"${r.ongoing ? ' checked' : ''}> Still going: the last day is always today</label>`
+      <label class="cb"><input type="checkbox" id="fOngoing"${r.ongoing ? ' checked' : ''}> Still going: the last day is always today</label>
+      <label class="cb"><input type="checkbox" id="fDur"${r.showDuration ? ' checked' : ''}> Show how long it lasts in its label</label>`
         : `<label class="field">Day<input type="date" id="fT" value="${esc(r.t)}"></label>`}
       <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
       <p class="note">${isBand ? 'Bands mark a period, like a trip, a season or a job. Drag a band to move it, or drag either end to change its days. A band that is still going stretches to today and drags by its first day.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it.'}</p>
@@ -1386,6 +1423,7 @@ function openEditor(s) {
       if (isBand) {
         bind(f, '#fStart', r, 'start', el => { const v = day(el); if (v && parseLocal(v) > parseLocal(r.end)) { r.end = v; f.querySelector('#fEnd').value = v; } return v; });
         bind(f, '#fEnd', r, 'end', el => { const v = day(el); if (v && parseLocal(v) < parseLocal(r.start)) { r.start = v; f.querySelector('#fStart').value = v; } return v; });
+        f.querySelector('#fDur').onchange = e => { r.showDuration = e.target.checked; touchRec(r); changed(); };
         f.querySelector('#fOngoing').onchange = e => {
           r.ongoing = e.target.checked;
           const end = f.querySelector('#fEnd');
@@ -1472,6 +1510,8 @@ function openSettings() {
   openDrawer('Settings', `
     <h3>This timeline</h3>
     <label class="field">Name<input type="text" id="sName" value="${esc(S.name)}"></label>
+    <label class="field">Style<select id="sStyle">${Object.entries(STYLES).map(([id, x]) => `<option value="${id}"${(S.style || 'vivid') === id ? ' selected' : ''}>${x.name}</option>`).join('')}</select></label>
+    <p class="note" id="sStyleNote">${look().note}</p>
     <label class="cb"><input type="checkbox" id="sShow"${S.showName ? ' checked' : ''}> Show the name above the timeline</label>
     <label class="cb"><input type="checkbox" id="sCap"${S.captions ? ' checked' : ''}> Show captions on photos</label>
     <label class="cb"><input type="checkbox" id="sDates"${S.dates ? ' checked' : ''}> Show dates on photos</label>
@@ -1481,6 +1521,8 @@ function openSettings() {
     <p class="note">Your timelines and photos are kept in this browser only. A backup file holds every timeline, photos included, so you can move them to another device.</p>
     <div class="row"><button class="btn" type="button" id="sExport">Export backup</button><button class="btn" type="button" id="sImport">Import backup</button></div>`, f => {
     const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchTimeline(); changed(); });
+    set('#sStyle', 'style', 'value');
+    f.querySelector('#sStyle').addEventListener('input', () => { f.querySelector('#sStyleNote').textContent = look().note; });
     set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading');
     f.querySelector('#sExport').onclick = exportBackup;
     f.querySelector('#sImport').onclick = () => $('#backupIn').click();
