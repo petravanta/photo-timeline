@@ -6,7 +6,7 @@ Lay photos out on a timeline by the date they were taken, mark periods with Gant
 
 **[Open Photo Timeline → petravanta.github.io/photo-timeline](https://petravanta.github.io/photo-timeline/)**
 
-1. **Add photos.** Each one lands on the timeline at the date its camera recorded (or, without one, when the file was last changed).
+1. **Add photos** from your device, or **From Google Photos**. Each one lands on the timeline at the date its camera (or Google Photos) recorded, or, without one, when the file was last changed.
 2. **Move them.** Drag a photo to another date or another track. On a phone, tap a photo to select it and then drag it, or hold it for a moment to pick it up straight away. The selection bar under the timeline moves it a day at a time too.
 3. **Mark what happened.** **+ Band** adds a period, like a trip or a season; drag it to move it or drag an end to change its days. **+ Event** adds a flag for a special day, with a line across every track.
 4. **Save as image** downloads a PNG (or opens the share sheet on a phone), at the width, sharpness and colors you pick.
@@ -22,6 +22,10 @@ Lay photos out on a timeline by the date they were taken, mark periods with Gant
 ## Your data
 
 Nothing is uploaded. The timeline is kept in your browser (`localStorage`) and the photos in its IndexedDB, shrunk to 1600 pixels on the longest side. **Settings → Export backup** downloads every timeline, photos included, as one JSON file, and **Import backup** merges one back in, following the *User data* section of the shared standards. Google Drive sync is not built yet.
+
+## Google Photos
+
+**From Google Photos** opens Google's own photo picker (the Photos app on a phone). You pick photos there and tap *Done*; the app then copies those photos in at the dates Google Photos has for them. It uses Google's Photos Picker API with the `photospicker.mediaitems.readonly` permission, so it only ever gets the photos you pick and can't browse the rest of your library. It signs in with the shared OAuth client for `https://petravanta.github.io` (`GOOGLE_CLIENT_ID` in the script), which needs the **Google Photos Picker API** turned on and that permission added to its consent screen. While the consent screen is in *Testing*, only Google accounts added as test users can use it.
 
 ## Running it
 
