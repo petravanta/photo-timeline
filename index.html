@@ -798,7 +798,8 @@ function fit(ctx, s, max) {
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ctx.measureText(s.slice(0, m) + '…').width <= max) lo = m; else hi = m - 1; }
   return lo ? s.slice(0, lo) + '…' : '';
 }
-const isSel = (kind, id) => sel && sel.kind === kind && sel.id === id;
+// sel is the item last picked; group holds every selected photo when more than one is selected
+const isSel = (kind, id) => (sel && sel.kind === kind && sel.id === id) || (kind === 'photo' && group.has(id));
 
 /* o: { k: tokens, ox: left edge of what is drawn, vw: width drawn, screen: true on screen (sticky labels, selection) } */
 function draw(ctx, L, o) {
@@ -848,13 +849,13 @@ function draw(ctx, L, o) {
     ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(it.ax, it.T.base, 4, 0, 7); ctx.fill();
   }
-  let dragged = null;
+  const dragged = [];
   for (const it of L.photos) {
     if (!vis(it.left, it.left + it.w)) continue;
-    if (o.screen && drag && drag.moved && isSel('photo', it.p.id)) { dragged = it; continue; }
+    if (o.screen && drag && drag.moved && drag.active && isSel('photo', it.p.id)) { dragged.push(it); continue; }
     drawPhoto(ctx, it, k, o);
   }
-  if (dragged) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; drawPhoto(ctx, dragged, k, o); ctx.restore(); }
+  for (const it of dragged) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; drawPhoto(ctx, it, k, o); ctx.restore(); }
   // Track names stay at the left edge while scrolling
   for (const T of L.tracks) {
     ctx.font = font(600, 13);
@@ -917,8 +918,8 @@ function draw(ctx, L, o) {
     ctx.fillText(fit(ctx, S.name, o.vw - 2 * PADX), stickyX, L.titleY);
   }
   // While dragging, show where the item will land
-  if (o.screen && drag && drag.moved && sel) {
-    const label = selDate();
+  if (o.screen && drag && drag.moved && drag.active && sel) {
+    const label = drag.group ? `${group.size} photos to ${trackOf(selItem()).name || 'Track'}` : selDate();
     const p = drag.at;
     ctx.font = font(600, 12);
     const w = ctx.measureText(label).width + 16, bx = clamp(p.x - w / 2, x0 + 4, x1 - w - 4), by = Math.max(2, p.y - 40);
@@ -958,7 +959,7 @@ function drawPhoto(ctx, it, k, o) {
 
 /* ---------- Screen canvas ---------- */
 const sc = $('#tlScroll'), spacer = $('#tlSpacer'), cv = $('#tl'), cx = cv.getContext('2d');
-let L = null, frozen = null, sel = null, drag = null, relayout = true, raf = 0, dpr = 1;
+let L = null, frozen = null, sel = null, group = new Set(), picking = false, drag = null, relayout = true, raf = 0, dpr = 1;
 function requestDraw(again = true) {
   relayout = relayout || again;
   if (!raf) raf = requestAnimationFrame(paint);
@@ -1007,11 +1008,39 @@ const trackAt = y => L.tracks.find(T => y >= T.y && y < T.bottom) || (y < L.trac
 function point(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left + sc.scrollLeft, y: e.clientY - r.top }; }
 function select(s, announce = true) {
   sel = s && s.kind !== 'track' ? { kind: s.kind, id: s.id } : null;
+  group = new Set();
+  if (!sel) picking = false;
   renderSelbar();
   requestDraw(false);
   if (announce && sel) $('#live').textContent = `${selName()} selected, ${selDate()}`;
 }
 function selItem() { return sel && find(KIND[sel.kind], sel.id); }
+// Add a photo to the selection, or take it out
+function toggle(id) {
+  if (!group.size && sel && sel.kind === 'photo') group.add(sel.id);
+  if (group.has(id)) group.delete(id); else group.add(id);
+  sel = group.has(id) ? { kind: 'photo', id } : group.size ? { kind: 'photo', id: [...group].pop() } : null;
+  if (group.size < 2) group = new Set();
+  if (!sel) picking = false;
+  renderSelbar();
+  requestDraw(false);
+  $('#live').textContent = group.size ? `${group.size} photos selected` : sel ? `${selName()} selected` : 'Nothing selected';
+}
+const groupPhotos = () => [...group].map(id => find('photos', id)).filter(Boolean);
+// Put the selected photos on another track; their dates stay as they are
+function moveGroup(trackId) {
+  const ps = group.size ? groupPhotos() : [selItem()], t = tracksSorted().find(x => x.id === trackId);
+  if (!t) return;
+  for (const r of ps) if (r.track !== trackId) { r.track = trackId; touchRec(r); }
+  changed();
+  $('#live').textContent = `${ps.length > 1 ? ps.length + ' photos' : selName()} moved to track ${t.name || 'Track'}`;
+}
+function resetDates() {
+  const ps = (group.size ? groupPhotos() : [selItem()]).filter(r => r && r.t !== r.taken);
+  for (const r of ps) { r.t = r.taken; touchRec(r); }
+  changed();
+  $('#live').textContent = ps.length > 1 ? `${ps.length} photos back on their original dates` : `${selName()} back on ${selDate()}`;
+}
 function selName() {
   const r = selItem();
   if (!r) return '';
@@ -1027,12 +1056,14 @@ function selDate() {
 cv.addEventListener('pointerdown', e => {
   if (e.button > 0 || !L) return;
   const p = point(e), touch = e.pointerType === 'touch', hit = hitTest(p.x, p.y, touch);
+  // Shift, Ctrl or Cmd with a click adds a photo to the selection
+  if (hit && hit.kind === 'photo' && (e.shiftKey || e.ctrlKey || e.metaKey || (picking && !touch && !isSel('photo', hit.id)))) { toggle(hit.id); return; }
   drag = { pid: e.pointerId, cx: e.clientX, cy: e.clientY, sx: sc.scrollLeft, hit, touch, moved: false, active: false, at: p, wasSelected: !!hit && isSel(hit.kind, hit.id) };
   // A mouse picks things up at once. A finger picks up an item that is already selected, or any item after a
   // short hold, so a swipe that starts on a photo still scrolls the page.
   if (hit && hit.kind !== 'track') {
     if (!touch || isSel(hit.kind, hit.id)) startDrag();
-    else drag.timer = setTimeout(() => { if (drag && !drag.moved) { select(hit); startDrag(); navigator.vibrate?.(10); requestDraw(false); } }, 380);
+    else if (!picking) drag.timer = setTimeout(() => { if (drag && !drag.moved) { select(hit); startDrag(); navigator.vibrate?.(10); requestDraw(false); } }, 380);
   }
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
 });
@@ -1041,6 +1072,8 @@ function startDrag() {
   if (!r) return;
   drag.active = true;
   drag.orig = { ...r };
+  // Dragging one of several selected photos moves them all between tracks and leaves their dates alone
+  if (drag.hit.kind === 'photo' && group.has(r.id)) drag.group = new Map(groupPhotos().map(g => [g.id, g.track]));
   frozen = { ppd: L.ppd, t0: L.t0, X0: L.X0 };
   if (!isSel(drag.hit.kind, drag.hit.id)) select(drag.hit, false);
 }
@@ -1064,7 +1097,10 @@ cv.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefaul
 function applyDrag(dxPx, y) {
   const r = selItem(), o = drag.orig, days = dxPx / L.ppd;
   if (!r) return;
-  if (sel.kind === 'photo') {
+  if (drag.group) {
+    const T = trackAt(y);
+    if (T) for (const g of groupPhotos()) g.track = T.tr.id;
+  } else if (sel.kind === 'photo') {
     r.t = fmtLocal(parseLocal(o.t) + days * DAY, true);
     const T = trackAt(y);
     if (T) r.track = T.tr.id;
@@ -1086,11 +1122,15 @@ function endDrag(e, cancel) {
   frozen = null;
   if (d.active && d.moved) {
     const r = selItem();
-    if (cancel && r) Object.assign(r, d.orig);
+    if (d.group) {
+      for (const g of groupPhotos()) if (cancel) g.track = d.group.get(g.id); else if (g.track !== d.group.get(g.id)) touchRec(g);
+      if (!cancel) $('#live').textContent = `${group.size} photos moved to track ${trackOf(r).name || 'Track'}`;
+    } else if (cancel && r) Object.assign(r, d.orig);
     else if (r) { touchRec(r); $('#live').textContent = `${selName()} moved to ${selDate()}`; }
     changed();
   } else if (!d.moved && !cancel) {
     if (d.hit && d.hit.kind === 'track') openEditor({ kind: 'track', id: d.hit.id });
+    else if (picking && d.hit && d.hit.kind === 'photo') toggle(d.hit.id);
     else if (d.hit && d.touch && isSel(d.hit.kind, d.hit.id) && d.wasSelected) openEditor(d.hit);
     else select(d.hit);
   }
@@ -1110,6 +1150,11 @@ cv.addEventListener('keydown', e => {
     return;
   }
   const step = e.shiftKey ? 7 : 1;
+  if (group.size) {   // several photos: only their track changes from the keyboard
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { moveTrack(e.key === 'ArrowUp' ? -1 : 1); e.preventDefault(); }
+    else if (e.key === 'Escape') select(null);
+    return;
+  }
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { nudge(e.key === 'ArrowLeft' ? -step : step); e.preventDefault(); }
   else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && sel.kind === 'photo') { moveTrack(e.key === 'ArrowUp' ? -1 : 1); e.preventDefault(); }
   else if (e.key === 'Enter') { openEditor(sel); e.preventDefault(); }
@@ -1128,6 +1173,7 @@ function nudge(days) {
 function moveTrack(dir) {
   const r = selItem(), ts = tracksSorted(), i = ts.indexOf(trackOf(r)), t = ts[i + dir];
   if (!t) return;
+  if (group.size) return moveGroup(t.id);
   r.track = t.id; touchRec(r); changed();
   $('#live').textContent = `${selName()} moved to track ${t.name}`;
 }
@@ -1191,9 +1237,11 @@ function renderUI() {
   pick.innerHTML = ts.map(t => `<option value="${esc(t.id)}">to ${esc(t.name || 'Track')}</option>`).join('');
   if (ts.some(t => t.id === cur)) pick.value = cur;
   $('#hint').textContent = coarse.matches
-    ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away.'
-    : 'Drop photos anywhere to add them, onto a track to put them there. Drag photos to a new date or track. Double-click anything to edit it. Ctrl + scroll zooms.';
-  if (sel && !selItem()) sel = null;
+    ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away. Tap Select more to move several photos at once.'
+    : 'Drop photos anywhere to add them, onto a track to put them there. Drag photos to a new date or track. Shift-click to select several and move them together. Double-click anything to edit it. Ctrl + scroll zooms.';
+  if (group.size) { group = new Set(groupPhotos().map(r => r.id)); if (group.size < 2) group = new Set(); }
+  if (sel && !selItem()) sel = group.size ? { kind: 'photo', id: [...group].pop() } : null;
+  if (!sel) picking = false;
   renderZoom();
   renderSelbar();
   renderItems();
@@ -1203,16 +1251,33 @@ function renderSelbar() {
   const bar = $('#selbar'), r = selItem();
   bar.hidden = !r;
   if (!r) return;
+  const ts = tracksSorted(), moveTo = () => ts.length > 1 ? `<select class="btn sm" data-move aria-label="Move to track"><option value="">Move to…</option>${ts.map(t => `<option value="${esc(t.id)}">${esc(t.name || 'Track')}</option>`).join('')}</select>` : '';
+  const more = `<button class="btn sm" type="button" data-more aria-pressed="${picking}">${picking ? 'Picking…' : 'Select more'}</button>`;
+  const wire = () => {
+    bar.querySelector('[data-move]')?.addEventListener('change', e => { if (e.target.value) moveGroup(e.target.value); });
+    bar.querySelector('[data-reset]')?.addEventListener('click', resetDates);
+    bar.querySelector('[data-more]')?.addEventListener('click', () => { picking = !picking; renderSelbar(); $('#live').textContent = picking ? 'Tap photos to add them to the selection' : ''; });
+    bar.querySelector('[data-close]').onclick = () => select(null);
+  };
+  if (group.size) {
+    const ps = groupPhotos(), names = [...new Set(ps.map(p => trackOf(p).name || 'Track'))];
+    bar.innerHTML = `<div class="what"><b>${ps.length} photos</b><span>${esc(names.length > 2 ? names.length + ' tracks' : names.join(', '))}${picking ? ' · tap photos to add or remove' : ''}</span></div>
+      ${moveTo()}${ps.some(p => p.t !== p.taken) ? '<button class="btn sm" type="button" data-reset>Reset dates</button>' : ''}${more}
+      <button class="btn sm ghost" type="button" data-close aria-label="Clear selection">Done</button>`;
+    return wire();
+  }
   const kindName = { photo: 'Photo', band: 'Band', event: 'Event' }[sel.kind];
   const extra = sel.kind === 'photo' ? ` · ${esc(trackOf(r).name)}` : '';
   bar.innerHTML = `<div class="what"><b>${esc(selName())}</b><span>${kindName} · ${esc(selDate())}${extra}</span></div>
     <button class="btn sm" type="button" data-nudge="-1" aria-label="One day earlier">◀ Day</button>
     <button class="btn sm" type="button" data-nudge="1" aria-label="One day later">Day ▶</button>
+    ${sel.kind === 'photo' && r.t !== r.taken ? '<button class="btn sm" type="button" data-reset aria-label="Back to its original date">Reset date</button>' : ''}
+    ${sel.kind === 'photo' ? more : ''}
     <button class="btn sm primary" type="button" data-edit>Edit</button>
     <button class="btn sm ghost" type="button" data-close aria-label="Clear selection">Done</button>`;
   bar.querySelectorAll('[data-nudge]').forEach(b => b.onclick = () => nudge(+b.dataset.nudge));
   bar.querySelector('[data-edit]').onclick = () => openEditor(sel);
-  bar.querySelector('[data-close]').onclick = () => select(null);
+  wire();
 }
 function renderItems() {
   const box = $('#items');
@@ -1433,7 +1498,7 @@ function renderPicker() {
 function switchTo(id) {
   curId = id;
   try { localStorage.setItem(CUR_KEY, id); } catch (e) {}
-  sel = null; frozen = null; L = null;
+  sel = null; group = new Set(); picking = false; frozen = null; L = null;
   sc.scrollLeft = 0;
   renderUI();
   requestDraw();
