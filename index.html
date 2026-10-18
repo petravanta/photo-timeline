@@ -217,6 +217,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
     <button class="btn" id="addBand" type="button">+ Band</button>
     <button class="btn" id="addEvent" type="button">+ Event</button>
     <span class="grow"></span>
+    <button class="btn" id="playBtn" type="button">Play</button>
     <button class="btn" id="exportBtn" type="button">Save as image</button>
     <button class="btn ghost" id="settingsBtn" type="button">Settings</button>
   </div>
@@ -1928,6 +1929,176 @@ async function beforeAfter(a, b, opt) {
   if (credit) { ctx.font = font(500, 13); ctx.fillStyle = k.muted; ctx.textAlign = 'right'; ctx.fillText(CREDIT, W - pad, H - 14); }
   return new Promise(res => c.toBlob(res, 'image/png'));
 }
+/* ---------- Playthrough: a video with one panel per track. Photos come in order of time; each panel holds its
+   track's latest photo until a newer one on that track replaces it ---------- */
+const PLAY_SHAPES = { square: [1080, 1080], story: [1080, 1920], wide: [1920, 1080] };
+const PLAY_HOLD = 2, PLAY_FADE = 0.3;   // steps the last frame stays up; the part of a step a new photo fades in over
+function playModel(opt) {
+  const [W, H] = PLAY_SHAPES[opt.shape], S = cur(), pad = 48, gap = 28;
+  const ps = mine('photos').sort((a, b) => parseLocal(a.t) - parseLocal(b.t));
+  const trs = tracksSorted().filter(t => ps.some(p => trackOf(p) === t));
+  const head = S.showName && S.name ? 92 : 24, foot = 150 + (S.credit !== false ? 30 : 0), text = 74, label = 40;
+  // The grid that gives each panel the most room for a photo
+  const aw = W - 2 * pad, ah = H - head - foot, n = trs.length;
+  let grid = null;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c), cw = (aw - (c - 1) * gap) / c, ch = (ah - (r - 1) * gap) / r, side = Math.min(cw, ch - label - text);
+    if (!grid || side > grid.side) grid = { c, r, cw, ch, side };
+  }
+  const panels = trs.map((t, i) => {
+    const col = i % grid.c, row = Math.floor(i / grid.c), inRow = Math.min(grid.c, n - row * grid.c);
+    const x = pad + (aw - inRow * grid.cw - (inRow - 1) * gap) / 2 + col * (grid.cw + gap);   // a short last row is centered
+    const y = head + (ah - grid.r * grid.ch - (grid.r - 1) * gap) / 2 + row * (grid.ch + gap);
+    return { t, x, y, w: grid.cw, h: grid.ch, steps: ps.map((p, j) => j).filter(j => trackOf(ps[j]) === t) };
+  });
+  return { W, H, pad, ps, panels, head, label, text, steps: ps.length - 1 + PLAY_HOLD, secs: (ps.length - 1 + PLAY_HOLD) * opt.pace };
+}
+// The frame at s steps in: photo j arrives at step j
+function playFrame(ctx, M, s, k, images) {
+  const { W, H, pad, ps } = M, S = cur(), st = look();
+  ctx.fillStyle = k.surface; ctx.fillRect(0, 0, W, H);
+  if (S.showName && S.name) {
+    ctx.font = st.serif ? font(400, 46, SERIF) : font(600, 42, k.fDisplay); ctx.fillStyle = k.ink;
+    ctx.fillText(fit(ctx, S.name, W - 2 * pad), pad, 66);
+  }
+  for (const P of M.panels) {
+    const col = k.c[P.t.color] || k.accent;
+    ctx.font = font(700, 22); ctx.fillStyle = col;
+    ctx.fillText(fit(ctx, P.t.name || 'Track', P.w), P.x, P.y + 26);
+    const box = { x: P.x, y: P.y + M.label, w: P.w, h: P.h - M.label - M.text };
+    const shown = P.steps.filter(j => j <= s), j = shown[shown.length - 1];
+    if (j === undefined) {   // this track's first photo is still to come
+      ctx.fillStyle = k.sunk; rr(ctx, box.x, box.y, box.w, box.h, st.radius); ctx.fill();
+      continue;
+    }
+    // Contain the photo in the box, so nothing is cut beyond the person's own crop, just under the track's name
+    const place = p => { const a = aspect(p), w = Math.min(box.w, box.h * a), h = w / a; return { left: box.x, top: box.y, w, h, p }; };
+    const fade = clamp((s - j) / PLAY_FADE, 0, 1), prev = shown[shown.length - 2];
+    if (prev !== undefined && fade < 1) drawPhoto(ctx, place(ps[prev]), k, { images, plain: true });
+    ctx.globalAlpha = fade;
+    const it = place(ps[j]);
+    drawPhoto(ctx, it, k, { images, plain: true });
+    // Date and caption right under the photo
+    const p = ps[j], by = it.top + it.h;
+    ctx.font = font(600, 24); ctx.fillStyle = k.ink;
+    ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), P.w), P.x, by + 34);
+    if (p.caption) { ctx.font = font(500, 21); ctx.fillStyle = k.muted; ctx.fillText(fit(ctx, p.caption, P.w), P.x, by + 62); }
+    ctx.globalAlpha = 1;
+  }
+  // A strip along the bottom: a dot per photo in its track's color, and the playhead
+  const credit = S.credit !== false, base = H - (credit ? 30 : 0) - 46, x0 = pad + 8, x1 = W - pad - 8;
+  const xAt = j => ps.length > 1 ? x0 + (x1 - x0) * j / (ps.length - 1) : (x0 + x1) / 2;
+  const now = Math.min(Math.floor(s), ps.length - 1), hx = xAt(Math.min(s, ps.length - 1));
+  ctx.strokeStyle = rgba(k.ink, 0.18); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x0, base); ctx.lineTo(x1, base); ctx.stroke();
+  ctx.strokeStyle = k.ink; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x0, base); ctx.lineTo(hx, base); ctx.stroke();
+  ps.forEach((p, j) => {
+    ctx.fillStyle = j <= s ? k.c[trackOf(p).color] || k.accent : rgba(k.ink, 0.2);
+    ctx.beginPath(); ctx.arc(xAt(j), base, j === now ? 8 : 5, 0, 7); ctx.fill();
+  });
+  ctx.font = font(700, 28); ctx.fillStyle = k.ink;
+  const label = F.dmy.format(parseLocal(ps[now].t)), lw = ctx.measureText(label).width;
+  ctx.fillText(label, clamp(hx - lw / 2, x0 - 8, x1 + 8 - lw), base - 26);
+  ctx.font = font(500, 18); ctx.fillStyle = k.muted;
+  ctx.fillText(F.my.format(parseLocal(ps[0].t)), x0 - 8, base + 34);
+  ctx.textAlign = 'right'; ctx.fillText(F.my.format(parseLocal(ps[ps.length - 1].t)), x1 + 8, base + 34);
+  if (credit) { ctx.font = font(500, 18); ctx.fillText(CREDIT, W - pad, H - 18); }
+  ctx.textAlign = 'left';
+}
+// The best video format this browser can record: MP4 where it can, for phones and social sites, else WebM
+function videoType() {
+  if (!window.MediaRecorder) return null;
+  return ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) || null;
+}
+function openPlay() {
+  if ($('#tlPanel').hidden || !mine('photos').length) return toast('Add some photos first.');
+  const opt = { shape: innerWidth < innerHeight ? 'story' : 'square', pace: 1.2, theme: 'light' };
+  try { Object.assign(opt, JSON.parse(localStorage.getItem('photoTimeline.play')) || {}); } catch (e) {}
+  const type = videoType(), canShare = !!(navigator.canShare && window.File);
+  const segBtns = (key, vals) => `<div class="seg" role="group">${vals.map(([v, l]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(opt[key]) === String(v)}">${l}</button>`).join('')}</div>`;
+  openDrawer('Play through', `
+    <canvas id="pvCv" class="preview" style="max-height:380px;display:block" aria-label="Playthrough preview"></canvas>
+    <div class="row"><button class="btn" type="button" id="pvPlay">Pause</button><button class="btn" type="button" id="pvAgain">From the start</button></div>
+    <p class="note">Each track gets its own panel. A photo stays up until a newer one on its track replaces it.</p>
+    <div class="field">Shape${segBtns('shape', [['square', 'Square'], ['story', '9:16'], ['wide', '16:9']])}</div>
+    <div class="field">Each photo${segBtns('pace', [[0.7, 'Quick'], [1.2, 'Steady'], [2, 'Slow']])}</div>
+    <div class="field">Colors${segBtns('theme', [['light', 'Light'], ['dark', 'Dark']])}</div>
+    <p class="note" id="pvLen"></p>
+    ${type ? `<div class="row"><button class="btn primary" type="button" id="pvSave">Save video</button>${canShare ? '<button class="btn" type="button" id="pvShare">Share…</button>' : ''}</div>`
+      : '<p class="note">This browser can’t record video. Chrome, Edge, Firefox and Safari can.</p>'}
+    <video id="pvOut" class="preview" controls playsinline hidden style="max-height:380px"></video>`, async f => {
+    const cv2 = f.querySelector('#pvCv'), ctx = cv2.getContext('2d'), images = new Map();
+    let M, k, t0 = performance.now(), paused = false, at = 0, raf2 = 0, rec = null, blob = null;
+    const setup = () => {
+      M = playModel(opt); k = tokensFor(opt.theme);
+      cv2.width = M.W; cv2.height = M.H;
+      f.querySelector('#pvLen').textContent = `${M.ps.length} photo${M.ps.length === 1 ? '' : 's'}, ${Math.round(M.secs)} seconds.`;
+    };
+    const tick = now => {
+      if (!document.contains(cv2)) { rec && rec.state !== 'inactive' && rec.stop(); return; }   // drawer closed
+      if (!paused) at = Math.max(0, now - t0) / 1000;   // a frame's time can be a little before t0
+      const s = at / opt.pace;
+      if (s >= M.steps && !rec) { t0 = now; at = 0; }   // the preview loops
+      playFrame(ctx, M, Math.min(s, M.steps), k, images);
+      if (rec && s >= M.steps && rec.state === 'recording') rec.stop();
+      raf2 = requestAnimationFrame(tick);
+    };
+    const restart = () => { t0 = performance.now(); at = 0; paused = false; f.querySelector('#pvPlay').textContent = 'Pause'; };
+    f.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+      if (rec) return;
+      opt[b.dataset.k] = isNaN(+b.dataset.v) ? b.dataset.v : +b.dataset.v;
+      f.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      try { localStorage.setItem('photoTimeline.play', JSON.stringify(opt)); } catch (e) {}
+      blob = null; setup(); restart();
+    });
+    f.querySelector('#pvPlay').onclick = e => {
+      paused = !paused; e.target.textContent = paused ? 'Play' : 'Pause';
+      if (!paused) t0 = performance.now() - at * 1000;
+    };
+    f.querySelector('#pvAgain').onclick = restart;
+    const base = (cur().name || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline';
+    const name = () => `${base}.${type.startsWith('video/mp4') ? 'mp4' : 'webm'}`;
+    // Recording plays the whole thing once in real time, so the page has to stay open and in view
+    const record = () => blob ? Promise.resolve(blob) : new Promise((res, rej) => {
+      const chunks = [];
+      rec = new MediaRecorder(cv2.captureStream(30), { mimeType: type, videoBitsPerSecond: 8e6 });
+      rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+      rec.onstop = () => {
+        rec = null;
+        f.querySelectorAll('#pvSave,#pvShare,[data-k]').forEach(b => b.disabled = false);
+        if (!document.contains(cv2)) return rej(new Error('closed'));
+        blob = new Blob(chunks, { type: type.split(';')[0] });
+        const v = f.querySelector('#pvOut');
+        if (v.src) URL.revokeObjectURL(v.src);
+        v.src = URL.createObjectURL(blob); v.hidden = false;
+        toast(''); res(blob);
+      };
+      f.querySelectorAll('#pvSave,#pvShare,[data-k]').forEach(b => b.disabled = true);
+      restart();
+      rec.start(1000);
+      toast(`Recording… keep this page open for ${Math.round(M.secs)} seconds.`, (M.secs + 5) * 1000);
+    });
+    if (type) {
+      f.querySelector('#pvSave').onclick = async () => { const b = await record().catch(() => null); if (b) { download(b, name()); toast('Video saved'); } };
+      f.querySelector('#pvShare')?.addEventListener('click', async () => {
+        const b = await record().catch(() => null);
+        if (!b) return;
+        const file = new File([b], name(), { type: b.type });
+        // Sharing has to follow a tap, and recording took a while, so ask for one more when the browser wants it
+        if (!navigator.canShare({ files: [file] })) { download(b, name()); return toast('Video saved'); }
+        try { await navigator.share({ files: [file], title: cur().name || 'Photo timeline' }); }
+        catch (err) { if (err.name === 'NotAllowedError') toast('Video ready. Tap Share again to send it.'); else if (err.name !== 'AbortError') download(b, name()); }
+      });
+    }
+    setup();
+    await document.fonts.ready;
+    await Promise.all(M.ps.map(p => loadImg(p.id).then(img => images.set(p.id, img), () => {})));
+    restart();
+    raf2 = requestAnimationFrame(tick);
+  });
+}
+$('#playBtn').onclick = openPlay;
 const CREDIT = 'Generated with https://petravanta.github.io/photo-timeline/', CREDIT_H = 18;
 
 // Where to cut the timeline into n pieces: each near an even share of what's left, at a spot no photo or event
