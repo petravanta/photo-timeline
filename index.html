@@ -134,7 +134,12 @@ textarea{resize:vertical}
 .tl-scroll{overflow-x:auto;overflow-y:hidden;position:relative;overscroll-behavior-x:contain}
 .tl-spacer{position:relative}
 #tl{position:sticky;left:0;top:0;display:block;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;outline-offset:-3px}
-.tl-scroll.drop{outline:3px dashed var(--accent);outline-offset:-6px}
+.drop-overlay{position:fixed;inset:0;z-index:50;pointer-events:none;display:grid;place-items:center;background:rgba(10,16,20,.28);
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.drop-overlay::before{content:"";position:absolute;inset:12px;border:3px dashed var(--accent);border-radius:16px}
+.drop-overlay p{background:var(--surface);color:var(--ink);border-radius:999px;padding:12px 22px;font-weight:600;font-size:16px;box-shadow:0 6px 24px rgba(0,0,0,.18);max-width:100%;text-align:center}
+.fine-only{display:none}
+@media (pointer:fine){.fine-only{display:block}}
 .selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border-top:1px solid var(--line);background:var(--sunk)}
 .selbar .what{flex:1 1 180px;min-width:0;font-size:14px}
 .selbar .what b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -198,6 +203,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
     <h2>Lay your photos out in time</h2>
     <p>Add photos and they line up by the date they were taken. Drag them to another day or another track, mark periods with bands and special days with events, then save the whole timeline as an image.</p>
     <div class="row"><button class="btn primary big" id="emptyAdd" type="button">Add photos</button><button class="btn big" id="emptyGoogle" type="button">From Google Photos</button></div>
+    <p class="small fine-only">You can also drop photos anywhere on this page.</p>
     <p class="small">Photos stay on this device. Nothing is uploaded, and photos from Google Photos are copied in.</p>
   </section>
 
@@ -222,6 +228,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
   <p class="sr-only" id="live" aria-live="polite"></p>
 </main>
 <div id="layer"></div>
+<div class="drop-overlay" id="dropOverlay" hidden><p id="dropText">Drop to add photos</p></div>
 <input type="file" id="photoIn" accept="image/*" multiple hidden>
 <input type="file" id="backupIn" accept="application/json,.json" hidden>
 <script>
@@ -448,8 +455,10 @@ async function shrink(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 async function addFiles(files, trackId) {
-  files = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif|avif)$/i.test(f.name));
-  if (!files.length) return toast('There were no photos in that selection.');
+  const all = [...files];
+  files = all.filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif|avif)$/i.test(f.name));
+  if (!files.length) return toast('Only photos can go on a timeline. Add JPEG, PNG, WebP, GIF or HEIC files.', 5000);
+  const skipped = all.length - files.length;
   trackId = trackId || $('#trackPick').value || tracksSorted()[0].id;
   const bad = [];
   let added = 0;
@@ -462,8 +471,9 @@ async function addFiles(files, trackId) {
       added++;
     } catch (e) { bad.push(f.name); }
   }
-  if (bad.length) toast(`Added ${added}. Couldn’t read ${bad.length === 1 ? bad[0] : bad.length + ' files'}; this browser may not open that format.`, 6000);
-  else toast(added === 1 ? 'Photo added' : `${added} photos added`);
+  const skip = skipped ? ` Skipped ${skipped} file${skipped === 1 ? '' : 's'} that ${skipped === 1 ? 'isn’t a photo' : 'aren’t photos'}.` : '';
+  if (bad.length) toast(`Added ${added}. Couldn’t read ${bad.length === 1 ? bad[0] : bad.length + ' files'}; this browser may not open that format.${skip}`, 6000);
+  else toast((added === 1 ? 'Photo added.' : `${added} photos added.`) + skip, skip ? 5000 : 2600);
 }
 
 async function storePhoto(file, meta, trackId) {
@@ -1127,16 +1137,33 @@ $('#zoomIn').onclick = () => zoomBy(1.5);
 $('#zoomOut').onclick = () => zoomBy(1 / 1.5);
 $('#zoomFit').onclick = () => { cur().zoom = 1; touchTimeline(); save(); renderZoom(); requestDraw(); sc.scrollLeft = 0; };
 
-// Drop photos from the desktop onto a track
-sc.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); sc.classList.add('drop'); } });
-sc.addEventListener('dragleave', () => sc.classList.remove('drop'));
-sc.addEventListener('drop', e => {
-  e.preventDefault(); sc.classList.remove('drop');
-  const T = L && trackAt(point(e).y);
-  addFiles(e.dataTransfer.files, T && T.tr.id);
+/* Drag and drop, as STANDARDS.md "Adding photos" asks: the whole page takes dropped photos, an overlay says where
+   they will go, and a drop on a track puts them on that track */
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+function dropTarget(e) {
+  const T = e.target === cv && L ? trackAt(point(e).y) : null;
+  return T ? T.tr : (tracksSorted().find(t => t.id === $('#trackPick').value) || tracksSorted()[0]);
+}
+function showDrop(e) {
+  // While dragging, browsers reveal each file's type but not its name, so this counts what looks like a photo
+  const n = [...(e.dataTransfer.items || [])].filter(i => i.kind === 'file' && (!i.type || i.type.startsWith('image/'))).length;
+  const tr = dropTarget(e), many = tracksSorted().length > 1;
+  $('#dropText').textContent = `Drop to add ${n > 1 ? n + ' photos' : n === 1 ? 'the photo' : 'photos'} to ${many ? `${tr.name || 'Track'} on ` : ''}${cur().name || 'this timeline'}`;
+  $('#dropOverlay').hidden = false;
+}
+function hideDrop() { dragDepth = 0; $('#dropOverlay').hidden = true; }
+document.addEventListener('dragenter', e => { if (hasFiles(e) && !$('#layer').firstChild) { dragDepth++; e.preventDefault(); showDrop(e); } });
+document.addEventListener('dragover', e => { if (hasFiles(e)) { e.preventDefault(); if (!$('#layer').firstChild) showDrop(e); else e.dataTransfer.dropEffect = 'none'; } });
+document.addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) hideDrop(); });
+document.addEventListener('dragend', hideDrop);
+document.addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();   // never let the browser open the file in place of the app
+  hideDrop();
+  if ($('#layer').firstChild) return;
+  addFiles(e.dataTransfer.files, dropTarget(e).id);
 });
-document.addEventListener('dragover', e => { if ($('#tlPanel').hidden) e.preventDefault(); });
-document.addEventListener('drop', e => { if ($('#tlPanel').hidden && e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
 
 /* ---------- Page UI ---------- */
 function changed() { save(); requestDraw(); renderUI(); }
@@ -1153,7 +1180,7 @@ function renderUI() {
   if (ts.some(t => t.id === cur)) pick.value = cur;
   $('#hint').textContent = coarse.matches
     ? 'Tap a photo to select it, then drag it to a new date or track. Hold to pick one up straight away.'
-    : 'Drag photos to a new date or track. Double-click anything to edit it. Ctrl + scroll zooms.';
+    : 'Drop photos anywhere to add them, onto a track to put them there. Drag photos to a new date or track. Double-click anything to edit it. Ctrl + scroll zooms.';
   if (sel && !selItem()) sel = null;
   renderZoom();
   renderSelbar();
