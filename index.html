@@ -509,7 +509,8 @@ function gphotosToken() {
     if (GPhotos.token && Date.now() < GPhotos.exp) return res();
     try { await loadGis(); } catch (e) { return rej(e); }
     google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID, scope: 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
+      // Always ask which account, since the photos may live in a different one
+      client_id: GOOGLE_CLIENT_ID, scope: 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly', prompt: 'select_account',
       callback: r => { if (r.error) return rej(r); GPhotos.token = r.access_token; GPhotos.exp = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000; res(); },
       error_callback: rej
     }).requestAccessToken();
