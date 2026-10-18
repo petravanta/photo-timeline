@@ -171,6 +171,18 @@ details.photos>summary{cursor:pointer;font-size:13px;color:var(--accent);padding
 input[type=date],input[type=datetime-local]{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:15px;min-width:0;text-transform:none;letter-spacing:0;font-weight:500;color:var(--ink)}
 input[type=range]{accent-color:var(--accent);width:100%}
 .preview{width:100%;max-height:240px;object-fit:contain;border-radius:8px;background:var(--sunk)}
+/* Crop: the photo at its own shape, with a frame that drags; outside the frame is dimmed */
+.crop{position:relative;align-self:center;max-width:100%;overflow:hidden;border-radius:8px;background:var(--sunk);touch-action:none;user-select:none;-webkit-user-select:none}
+.crop img{display:block;width:100%;height:100%;pointer-events:none}
+.crop .frame{position:absolute;box-shadow:0 0 0 9999px rgba(0,0,0,.55);outline:2px solid #fff;cursor:move}
+.crop .frame:focus-visible{outline:3px solid var(--accent)}
+/* Corner handles sit just inside the frame so the photo's edge never clips them */
+.crop .h{position:absolute;width:30px;height:30px}
+.crop .h::after{content:"";position:absolute;width:14px;height:14px;border:3px solid #fff;filter:drop-shadow(0 0 1px rgba(0,0,0,.6))}
+.crop .h[data-c="nw"]{left:0;top:0;cursor:nwse-resize}.crop .h[data-c="nw"]::after{left:0;top:0;border-width:3px 0 0 3px}
+.crop .h[data-c="ne"]{right:0;top:0;cursor:nesw-resize}.crop .h[data-c="ne"]::after{right:0;top:0;border-width:3px 3px 0 0}
+.crop .h[data-c="sw"]{left:0;bottom:0;cursor:nesw-resize}.crop .h[data-c="sw"]::after{left:0;bottom:0;border-width:0 0 3px 3px}
+.crop .h[data-c="se"]{right:0;bottom:0;cursor:nwse-resize}.crop .h[data-c="se"]::after{right:0;bottom:0;border-width:0 3px 3px 0}
 .note{font-size:13px;color:var(--muted)}
 .hero{display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:28px 20px}
 .hero p{max-width:60ch;color:var(--muted)}
@@ -655,7 +667,7 @@ function autoTrackH(tr) {
   return Math.round(clamp(Math.min(rows > 1 ? tall * 0.75 : tall, wide), 56, 150));
 }
 const trackH = tr => tr.height || autoTrackH(tr);
-const aspect = p => clamp((p.w || 4) / (p.h || 3), 0.5, 2.2);
+const aspect = p => clamp((p.w || 4) * (p.crop ? p.crop.w : 1) / ((p.h || 3) * (p.crop ? p.crop.h : 1)), 0.5, 2.2);
 const measure = document.createElement('canvas').getContext('2d');
 let K = {};   // theme tokens for drawing
 function font(weight, size, fam) { return `${weight} ${size}px ${fam || K.fBody}`; }
@@ -995,10 +1007,11 @@ function drawPhoto(ctx, it, k, o) {
   ctx.fillStyle = k.sunk; ctx.fill();
   ctx.clip();
   if (img) {
-    // Cover the box, cropping the middle when the photo is narrower or wider than the box allows
-    const ia = img.naturalWidth / img.naturalHeight, ba = w / h;
-    let sw = img.naturalWidth, sh = img.naturalHeight, sx = 0, sy = 0;
-    if (ia > ba) { sw = sh * ba; sx = (img.naturalWidth - sw) / 2; } else { sh = sw / ba; sy = (img.naturalHeight - sh) / 2; }
+    // Start from the person's crop, if any, then cover the box, trimming the middle when the shapes differ
+    const c = p.crop || { x: 0, y: 0, w: 1, h: 1 }, nw = img.naturalWidth, nh = img.naturalHeight;
+    let sx = c.x * nw, sy = c.y * nh, sw = c.w * nw, sh = c.h * nh;
+    const ia = sw / sh, ba = w / h;
+    if (ia > ba) { const d = sw - sh * ba; sw -= d; sx += d / 2; } else { const d = sh - sw / ba; sh -= d; sy += d / 2; }
     ctx.drawImage(img, sx, sy, sw, sh, left, top, w, h);
   }
   const lines = [];
@@ -1411,13 +1424,80 @@ function bind(f, sel, r, key, fn) {
 }
 function nextColor(list) { const used = list.map(r => r.color); return COLORS.find(c => !used.includes(c)) || COLORS[list.length % COLORS.length]; }
 
+/* Cropping keeps the whole photo and stores the frame as fractions of it, so it can always be undone */
+const CROPS = [['free', 'Any shape'], ['1', 'Square'], ['1.3333', '4:3 wide'], ['0.75', '3:4 tall'], ['1.5', '3:2 wide'], ['1.7778', '16:9 wide']];
+function wireCrop(f, r) {
+  const box = f.querySelector('.crop'), fr = box.querySelector('.frame'), shape = f.querySelector('#fShape'), un = f.querySelector('#fUncrop');
+  const pa = (r.w || 4) / (r.h || 3);   // the photo's own shape
+  let c = { ...(r.crop || { x: 0, y: 0, w: 1, h: 1 }) }, ratio = null;
+  const show = () => Object.assign(fr.style, { left: c.x * 100 + '%', top: c.y * 100 + '%', width: c.w * 100 + '%', height: c.h * 100 + '%' });
+  const save = () => {
+    const whole = c.x < 0.002 && c.y < 0.002 && c.w > 0.996 && c.h > 0.996;
+    if (whole) delete r.crop; else r.crop = { x: +c.x.toFixed(4), y: +c.y.toFixed(4), w: +c.w.toFixed(4), h: +c.h.toFixed(4) };
+    un.disabled = whole;
+    touchRec(r); changed();
+  };
+  const keep = () => { c.w = clamp(c.w, 0.05, 1); c.h = clamp(c.h, 0.05, 1); c.x = clamp(c.x, 0, 1 - c.w); c.y = clamp(c.y, 0, 1 - c.h); };
+  // Fit the frame to a shape, as large as it can be around its current middle
+  const fitShape = () => {
+    if (!ratio) return;
+    const mx = c.x + c.w / 2, my = c.y + c.h / 2, k = ratio / pa;   // width over height, in fractions
+    let w = Math.min(1, k), h = w / k;
+    if (h > 1) { h = 1; w = k; }
+    const cur = Math.sqrt((c.w * c.h) / (w * h));
+    if (cur < 1) { w *= cur; h *= cur; }
+    c = { x: mx - w / 2, y: my - h / 2, w, h };
+    keep();
+  };
+  shape.onchange = () => { ratio = shape.value === 'free' ? null : +shape.value; if (ratio) { fitShape(); show(); save(); } };
+  un.onclick = () => { c = { x: 0, y: 0, w: 1, h: 1 }; shape.value = 'free'; ratio = null; show(); save(); };
+  let d = null;
+  fr.addEventListener('pointerdown', e => {
+    const b = box.getBoundingClientRect();
+    d = { id: e.pointerId, corner: e.target.dataset.c, sx: e.clientX, sy: e.clientY, bw: b.width, bh: b.height, o: { ...c } };
+    fr.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  fr.addEventListener('pointermove', e => {
+    if (!d || e.pointerId !== d.id) return;
+    const dx = (e.clientX - d.sx) / d.bw, dy = (e.clientY - d.sy) / d.bh, o = d.o;
+    if (!d.corner) { c = { ...o, x: clamp(o.x + dx, 0, 1 - o.w), y: clamp(o.y + dy, 0, 1 - o.h) }; return show(); }
+    const west = d.corner[1] === 'w', north = d.corner[0] === 'n';
+    // The corner moves, the opposite corner stays put
+    const ax = west ? o.x + o.w : o.x, ay = north ? o.y + o.h : o.y;
+    let px = clamp((west ? o.x : o.x + o.w) + dx, 0, 1), py = clamp((north ? o.y : o.y + o.h) + dy, 0, 1);
+    let w = Math.max(0.05, Math.abs(px - ax)), h = Math.max(0.05, Math.abs(py - ay));
+    if (ratio) {
+      const k = ratio / pa;
+      if (w / h > k) w = h * k; else h = w / k;
+      const mw = west ? ax : 1 - ax, mh = north ? ay : 1 - ay;   // room toward the moving corner
+      if (w > mw) { w = mw; h = w / k; }
+      if (h > mh) { h = mh; w = h * k; }
+    }
+    c = { x: west ? ax - w : ax, y: north ? ay - h : ay, w, h };
+    keep(); show();
+  });
+  const end = e => { if (d && e.pointerId === d.id) { d = null; save(); } };
+  fr.addEventListener('pointerup', end);
+  fr.addEventListener('pointercancel', end);
+  fr.addEventListener('keydown', e => {
+    const step = 0.01, k = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!k) return;
+    e.preventDefault();
+    if (e.shiftKey) { c.w += k[0]; c.h += k[1]; if (ratio) c.h = c.w * pa / ratio; } else { c.x += k[0]; c.y += k[1]; }
+    keep(); show(); save();
+  });
+  show();
+}
+
 function openEditor(s) {
   const r = find(KIND[s.kind], s.id);
   if (!r) return;
   if (s.kind === 'photo') {
     const ts = tracksSorted();
     openDrawer('Photo', `
-      <img class="preview" alt="" data-pid="${esc(r.id)}">
+      <div class="crop" style="aspect-ratio:${r.w || 4}/${r.h || 3};width:min(100%, ${Math.round(260 * (r.w || 4) / (r.h || 3))}px)"><img alt="" data-pid="${esc(r.id)}"><div class="frame" tabindex="0" role="group" aria-label="Crop frame. Arrow keys move it, Shift and arrow keys resize it."><span class="h" data-c="nw"></span><span class="h" data-c="ne"></span><span class="h" data-c="sw"></span><span class="h" data-c="se"></span></div></div>
+      <div class="row"><label class="field grow">Crop<select id="fShape">${CROPS.map(([v, n]) => `<option value="${v}">${n}</option>`).join('')}</select></label><button class="btn sm" type="button" id="fUncrop"${r.crop ? '' : ' disabled'}>Show whole photo</button></div>
       <label class="field">Caption<input type="text" id="fCap" value="${esc(r.caption)}" placeholder="${esc(r.name || '')}"></label>
       <label class="field">Date and time<input type="datetime-local" step="1" id="fT" value="${esc(r.t)}"></label>
       <p class="note">${r.t === r.taken ? { camera: 'This is when the camera says the photo was taken.', google: 'This is when Google Photos says the photo was taken.' }[r.from] || 'The photo had no date from the camera, so this is when the file was last changed.' : `Moved from ${esc(showTime(r.taken))}, when it was ${r.from === 'file' ? 'last changed' : 'taken'}.`}</p>
@@ -1425,6 +1505,7 @@ function openEditor(s) {
       ${ts.length > 1 ? `<label class="field">Track<select id="fTrack">${ts.map(t => `<option value="${esc(t.id)}"${t === trackOf(r) ? ' selected' : ''}>${esc(t.name || 'Track')}</option>`).join('')}</select></label>` : ''}
       <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
       fillThumb(f.querySelector('img'));
+      wireCrop(f, r);
       bind(f, '#fCap', r, 'caption');
       bind(f, '#fT', r, 't', el => el.value && isFinite(parseLocal(el.value)) ? fmtLocal(parseLocal(el.value), true) : undefined);
       if (f.querySelector('#fReset')) f.querySelector('#fReset').onclick = () => { r.t = r.taken; touchRec(r); changed(); openEditor(s); };
