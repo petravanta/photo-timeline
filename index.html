@@ -982,6 +982,20 @@ function emptyStretches(points, lo, hi, avail, zoom) {
   return out.sort((x, y) => x.a - y.a);
 }
 
+/* Bands and events sit in lanes. One the person put in a lane (rec.lane) stays there; the rest take the first lane
+   with room, top down. items have a and z, the pixels they cover; each gets .lane, and the lane count comes back. */
+function packLanes(items) {
+  const used = [];   // per lane, the [a, z] spans taken
+  const take = (it, l) => { it.lane = l; (used[l] ||= []).push([it.a, it.z]); };
+  for (const it of items) if (Number.isInteger(it.rec.lane) && it.rec.lane >= 0) take(it, it.rec.lane);
+  for (const it of items) {
+    if (it.lane !== undefined) continue;
+    let l = 0;
+    while ((used[l] || []).some(([a, z]) => it.a < z + GAP && a < it.z + GAP)) l++;
+    take(it, l);
+  }
+  return used.length;
+}
 function layout(viewW, frozen, shift = 0) {
   const S = cur(), tracks = tracksSorted(), photos = mine('photos'), bands = mine('bands'), events = mine('events');
   let lo = Infinity, hi = -Infinity;
@@ -1037,34 +1051,30 @@ function layout(viewW, frozen, shift = 0) {
 
   measure.font = font(600, 12);
   if (events.length) {
-    const lanes = [];
-    const evs = events.map(e => ({ e, x: xOf(parseLocal(e.t)) })).sort((a, b) => a.x - b.x);
+    const evs = events.map(e => ({ e, rec: e, x: xOf(parseLocal(e.t)) })).sort((a, b) => a.x - b.x);
+    for (const it of evs) { it.w = Math.ceil(measure.measureText(it.e.label || 'Event').width) + 18; it.a = it.x; it.z = it.x + it.w; }
+    const n = packLanes(evs);
     for (const it of evs) {
-      it.w = Math.ceil(measure.measureText(it.e.label || 'Event').width) + 18;
-      let lane = lanes.findIndex(r => r + GAP < it.x);
-      if (lane < 0) { lane = lanes.length; lanes.push(0); }
-      lanes[lane] = it.x + it.w;
-      it.y = y + lane * EV_LANE; it.h = EV_LANE - 6;
+      it.y = y + it.lane * EV_LANE; it.h = EV_LANE - 6;
       minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x + it.w);
     }
-    L.events = evs;
-    y += lanes.length * EV_LANE + 4;
+    L.events = evs; L.evLanes = { top: y, n, h: EV_LANE };
+    y += n * EV_LANE + 4;
   }
   if (bands.length) {
-    const lanes = [];
-    const bs = bands.map(b => { const left = xOf(parseLocal(b.start)), right = Math.max(left + 4, xOf(bandEnd(b))); return { b, left, right }; })
+    const bs = bands.map(b => { const left = xOf(parseLocal(b.start)), right = Math.max(left + 4, xOf(bandEnd(b))); return { b, rec: b, left, right }; })
       .sort((a, b) => a.left - b.left || b.right - a.right);
     for (const it of bs) {
       it.labelW = Math.ceil(measure.measureText(bandLabel(it.b)).width) + 22;
-      const end = Math.max(it.right + (it.b.ongoing ? 10 : 0), it.left + it.labelW);
-      let lane = lanes.findIndex(r => r + GAP < it.left);
-      if (lane < 0) { lane = lanes.length; lanes.push(0); }
-      lanes[lane] = end;
-      it.y = y + lane * BAND_LANE; it.h = BAND_LANE - 8;
-      minX = Math.min(minX, it.left); maxX = Math.max(maxX, end);
+      it.a = it.left; it.z = Math.max(it.right + (it.b.ongoing ? 10 : 0), it.left + it.labelW);
     }
-    L.bands = bs;
-    y += lanes.length * BAND_LANE + 4;
+    const n = packLanes(bs);
+    for (const it of bs) {
+      it.y = y + it.lane * BAND_LANE; it.h = BAND_LANE - 8;
+      minX = Math.min(minX, it.left); maxX = Math.max(maxX, it.z);
+    }
+    L.bands = bs; L.bandLanes = { top: y, n, h: BAND_LANE };
+    y += n * BAND_LANE + 4;
   }
   L.tracksTop = y;
   for (const tr of tracks) {
@@ -1487,6 +1497,9 @@ function startDrag() {
   // Dragging one of several selected photos moves them all between tracks and leaves their dates alone
   if (drag.hit.kind === 'photo' && group.has(r.id)) drag.group = new Map(groupPhotos().map(g => [g.id, g.track]));
   frozen = { ppd: L.ppd, t0: L.t0, X0: L.X0, segs: L.segs };
+  // Bands and events can also be dragged up or down into another lane
+  const lanes = drag.hit.kind === 'band' ? L.bandLanes : drag.hit.kind === 'event' ? L.evLanes : null;
+  if (lanes) { const it = (drag.hit.kind === 'band' ? L.bands : L.events).find(i => i.rec.id === r.id); drag.lanes = { ...lanes, from: it ? it.lane : 0 }; }
   if (!isSel(drag.hit.kind, drag.hit.id)) select(drag.hit, false);
 }
 cv.addEventListener('pointermove', e => {
@@ -1518,7 +1531,12 @@ function applyDrag(dxPx, y) {
     const T = trackAt(y);
     if (T) r.track = T.tr.id;
   } else if (sel.kind === 'event') r.t = fmtLocal(nearestDay(moved(parseLocal(o.t))));
-  else {
+  if (drag.lanes && (sel.kind === 'event' || drag.hit.part === 'body')) {
+    // Up to one lane past the last makes a new one; staying in its own lane leaves it where it was placed
+    const { top, n, h, from } = drag.lanes, to = clamp(Math.floor((y - top) / h), 0, n);
+    if (to === from) { if (o.lane === undefined) delete r.lane; else r.lane = o.lane; } else r.lane = to;
+  }
+  if (sel.kind === 'band') {
     const part = drag.hit.part, at = parseLocal(part === 'end' ? o.end : o.start), n = Math.round((moved(at) - at) / DAY);
     if (part === 'body') { r.start = addDays(o.start, n); r.end = addDays(o.end, n); }
     else if (part === 'start') r.start = parseLocal(addDays(o.start, n)) > parseLocal(lastDay(o)) ? lastDay(o) : addDays(o.start, n);
@@ -1871,10 +1889,12 @@ function openEditor(s) {
       <label class="cb"><input type="checkbox" id="fOngoing"${r.ongoing ? ' checked' : ''}> Still going: the last day is always today</label>
       <label class="cb"><input type="checkbox" id="fDur"${r.showDuration ? ' checked' : ''}> Show how long it lasts in its label</label>`
         : `<label class="field">Day<input type="date" id="fT" value="${esc(r.t)}"></label>`}
+      <label class="field">Lane<select id="fLane"><option value="">Automatic</option>${Array.from({ length: (isBand ? L.bandLanes : L.evLanes)?.n + 1 || 2 }, (_, i) => `<option value="${i}"${r.lane === i ? ' selected' : ''}>${i === 0 ? 'Lane 1 (top)' : `Lane ${i + 1}`}</option>`).join('')}</select></label>
       <div class="field" style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Color${swatches('c', r.color)}</div>
-      <p class="note">${isBand ? 'Bands mark a period, like a trip, a season or a job. Drag a band to move it, or drag either end to change its days. A band that is still going stretches to today and drags by its first day.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it.'}</p>
+      <p class="note">${isBand ? 'Bands mark a period, like a trip, a season or a job. Drag a band to move it, up or down to another lane, or drag either end to change its days. A band that is still going stretches to today and drags by its first day.' : 'Events mark a special day with a flag and a line across every track. Drag the flag to move it, up or down to another lane.'}</p>
       <div class="row"><button class="btn danger" type="button" id="fDel">Delete</button><span class="grow"></span><button class="btn primary" type="button" data-close>Done</button></div>`, f => {
       bind(f, '#fLabel', r, 'label');
+      f.querySelector('#fLane').onchange = e => { if (e.target.value === '') delete r.lane; else r.lane = +e.target.value; touchRec(r); changed(); };
       const day = el => el.value && isFinite(parseLocal(el.value)) ? el.value : undefined;
       if (isBand) {
         bind(f, '#fStart', r, 'start', el => { const v = day(el); if (v && parseLocal(v) > parseLocal(r.end)) { r.end = v; f.querySelector('#fEnd').value = v; } return v; });
