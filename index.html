@@ -7,6 +7,9 @@
 <meta name="description" content="Lay photos out on a timeline by the date they were taken, mark periods with bands and special days with event markers, and save it as an image.">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#172129" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script>try{var t=localStorage.getItem('petravanta.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -2509,5 +2512,6 @@ if (Drive.on) driveSync();   // the Drive copy may have changed on another devic
 </script>
 <script src="https://petravanta.github.io/general/shared/hub-link.js" defer></script>
 <script src="https://petravanta.github.io/general/shared/theme-switch.js" defer></script>
+<script>if('serviceWorker' in navigator&&/^(petravanta\.github\.io|localhost|127\.0\.0\.1)$/.test(location.hostname))navigator.serviceWorker.register('sw.js').catch(function(){})</script>
 </body>
 </html>
