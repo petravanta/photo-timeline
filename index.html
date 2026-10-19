@@ -893,22 +893,32 @@ function stack(items, max, give = 0) {
   return Math.max(1, rows.length);
 }
 
-/* Long stretches with nothing in them, to squeeze on the axis: the longest first, while each is still more
-   than a fifth of what's left to show. A little time is kept either side so photos near the edge have room. */
+/* Long stretches with nothing in them, squeezed on the axis to a break mark. Each point in time comes with how far
+   its photo or label reaches either side, in pixels, so a break leaves just that much ordinary time beside it and the
+   empty space around it is only the mark. Longest gaps first, while a break saves real room; every break widens the
+   rest of the timeline, so shorter gaps can qualify after it. */
 const BREAK_W = 26;
-function emptyStretches(times, lo, hi) {
-  const ts = times.filter(isFinite).sort((a, b) => a - b), gaps = [];
-  for (let i = 1; i < ts.length; i++) if (ts[i] > ts[i - 1]) gaps.push([ts[i - 1], ts[i]]);
-  gaps.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]));
-  let shown = hi - lo;
-  const out = [];
-  for (const [a, b] of gaps) {
-    if (b - a < 0.2 * (shown - (b - a)) || b - a < 3 * DAY) break;
-    shown -= b - a;
-    out.push([a, b]);
+function emptyStretches(points, lo, hi, avail, zoom) {
+  const ps = points.filter(q => isFinite(q.t)).sort((a, b) => a.t - b.t), gaps = [];
+  for (let i = 1; i < ps.length; i++) {
+    const a = ps[i - 1], b = ps[i];
+    if (b.t - a.t <= DAY) continue;
+    // How far the things at each end reach into the gap
+    const ml = Math.max(...ps.filter(q => q.t === a.t).map(q => q.r)), mr = Math.max(...ps.filter(q => q.t === b.t).map(q => q.l));
+    gaps.push({ a: a.t, b: b.t, ml, mr, cost: BREAK_W + ml + mr });
   }
-  const keep = Math.max(DAY / 2, shown * 0.04);
-  return out.map(([a, b]) => [a + Math.min(keep, (b - a) / 4), b - Math.min(keep, (b - a) / 4)]).sort((a, b) => a[0] - b[0]);
+  gaps.sort((x, y) => (y.b - y.a) - (x.b - x.a));
+  const out = [];
+  let shown = hi - lo, spent = 0;
+  for (const g of gaps) {
+    const left = avail - spent - g.cost;
+    if (left < avail * 0.15) break;   // keep some width for the time between photos
+    const ppd = left / ((shown - (g.b - g.a)) / DAY) * zoom;
+    if ((g.b - g.a) / DAY * ppd < g.cost + 24) continue;   // not worth a break
+    out.push(g);
+    shown -= g.b - g.a; spent += g.cost;
+  }
+  return out.sort((x, y) => x.a - y.a);
 }
 
 function layout(viewW, frozen, shift = 0) {
@@ -920,25 +930,38 @@ function layout(viewW, frozen, shift = 0) {
   events.forEach(e => see(parseLocal(e.t)));
   if (!isFinite(lo)) { const d = startOfDay(Date.now()); lo = d - 14 * DAY; hi = d + 14 * DAY; }
   if (hi - lo < DAY) { lo -= DAY / 2; hi += DAY / 2; }
-  const padT = (hi - lo) * 0.03;
+  const padT = S.skipGaps ? 0 : (hi - lo) * 0.03;   // squeezing leaves room for the first and last photos at the edges
   lo -= padT; hi += padT;
   fitW = viewW;
-  const edge = Math.round(Math.min(Math.max(...tracks.map(trackH)) * 0.75, viewW * 0.15));
+  // Where things are and how far each reaches either side: photos half their width, events and band ends a little
+  const half = p => Math.round(trackH(trackOf(p)) * aspect(p) / 2) + GAP;
+  const points = [...photos.map(p => ({ t: parseLocal(p.t), l: half(p), r: half(p) })),
+    ...bands.flatMap(b => [{ t: parseLocal(b.start), l: 8, r: 8 }, { t: bandEnd(b), l: 8, r: 8 }]),
+    ...events.map(e => ({ t: parseLocal(e.t), l: 8, r: 8 }))].filter(q => isFinite(q.t));
+  // Room at each end: when squeezing, just what the first and last photos need
+  let edgeL = Math.round(Math.min(Math.max(...tracks.map(trackH)) * 0.75, viewW * 0.15)), edgeR = edgeL;
+  if (S.skipGaps && points.length) {
+    const reach = (t, side) => Math.max(...points.filter(q => q.t === t).map(q => q[side]));
+    edgeL = Math.min(edgeL, reach(Math.min(...points.map(q => q.t)), 'l'));
+    edgeR = Math.min(edgeR, reach(Math.max(...points.map(q => q.t)), 'r'));
+  }
   const L = { viewW, tracks: [], photos: [], bands: [], events: [], lo, hi };
   if (frozen) Object.assign(L, frozen);
   else {
-    const skips = S.skipGaps ? emptyStretches([...photos.map(p => parseLocal(p.t)), ...bands.flatMap(b => [parseLocal(b.start), bandEnd(b)]), ...events.map(e => parseLocal(e.t))], lo, hi) : [];
-    const shown = hi - lo - skips.reduce((a, [c0, c1]) => a + c1 - c0, 0);
-    L.ppd = Math.max(1e-4, (viewW - 2 * PADX - 2 * edge - skips.length * BREAK_W) / (shown / DAY)) * (S.zoom || 1);
+    const avail = viewW - 2 * PADX - edgeL - edgeR;
+    const skips = S.skipGaps ? emptyStretches(points, lo, hi, avail, S.zoom || 1) : [];
+    const shown = hi - lo - skips.reduce((a, g) => a + g.b - g.a, 0);
+    L.ppd = Math.max(1e-4, (avail - skips.reduce((a, g) => a + g.cost, 0)) / (shown / DAY)) * (S.zoom || 1);
     L.t0 = lo;
-    L.X0 = PADX + edge + shift;
+    L.X0 = PADX + edgeL + shift;
     // The time scale is piecewise: ordinary stretches at ppd, each skipped stretch squeezed into BREAK_W pixels
     L.segs = [];
     let t = lo, x = L.X0;
-    for (const [c0, c1] of skips) {
+    for (const g of skips) {
+      const c0 = g.a + g.ml / L.ppd * DAY, c1 = g.b - g.mr / L.ppd * DAY;
       L.segs.push({ t, x, k: L.ppd / DAY });
       x += (c0 - t) * L.ppd / DAY;
-      L.segs.push({ t: c0, x, k: BREAK_W / (c1 - c0), skip: true, t1: c1 });
+      L.segs.push({ t: c0, x, k: BREAK_W / (c1 - c0), skip: true, t1: c1, gap: g.b - g.a });
       x += BREAK_W; t = c1;
     }
     L.segs.push({ t, x, k: L.ppd / DAY });
@@ -947,7 +970,7 @@ function layout(viewW, frozen, shift = 0) {
   const xOf = L.xOf = t => { const g = segAt('t', t); return g.x + (t - g.t) * g.k; };
   L.tOf = x => { const g = segAt('x', x); return g.t + (x - g.x) / g.k; };
 
-  let y = PADY, minX = Infinity, maxX = xOf(hi) + edge;
+  let y = PADY, minX = Infinity, maxX = xOf(hi) + edgeR;
   if (S.showName && S.name) { L.titleY = y + 20; y += 40; }
   L.bodyTop = y;
 
@@ -1223,7 +1246,7 @@ function draw(ctx, L, o) {
     ctx.fillStyle = k.surface; ctx.fillRect(a, y - 6, b - a, 12);
     ctx.beginPath(); ctx.moveTo(a - 3, y + 6); ctx.lineTo(a + 3, y - 6); ctx.moveTo(b - 3, y + 6); ctx.lineTo(b + 3, y - 6); ctx.stroke();
     ctx.font = font(500, 11); ctx.textAlign = 'center';
-    ctx.fillStyle = k.muted; ctx.fillText(gapLabel(g.t1 - g.t), g.x + BREAK_W / 2, L.axisY + 34);
+    ctx.fillStyle = k.muted; ctx.fillText(gapLabel(g.gap), g.x + BREAK_W / 2, L.axisY + 34);
     ctx.textAlign = 'left';
   }
   ctx.font = font(500, 12); ctx.fillStyle = k.muted; ctx.textAlign = 'center';
