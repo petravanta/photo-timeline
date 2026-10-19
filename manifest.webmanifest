@@ -2,7 +2,7 @@
   "name": "Photo Timeline",
   "short_name": "Timeline",
   "description": "Lay photos out on a timeline by the date they were taken, and save it as an image.",
-  "id": "./",
+  "id": "/photo-timeline/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
