@@ -104,6 +104,9 @@ textarea{resize:vertical}
 .checks label{display:inline-flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;background:var(--sunk)}
 .entry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-top:1px solid var(--line)}
 .entry .meta{font-size:12px;color:var(--muted)}
+.fullplay{position:fixed;inset:0;z-index:55;background:var(--surface);display:flex;flex-direction:column}
+.fullplay canvas{flex:1;min-height:0;width:100%;object-fit:contain;cursor:pointer}
+.fp-bar{display:flex;gap:8px;justify-content:center;padding:8px 16px calc(env(safe-area-inset-bottom,0px) + 8px)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:14px;font-weight:600;z-index:60;max-width:calc(100% - 32px)}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 @media (prefers-reduced-motion:no-preference){.drawer{animation:slide .18s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:.4}}}
@@ -1934,7 +1937,7 @@ async function beforeAfter(a, b, opt) {
 const PLAY_SHAPES = { square: [1080, 1080], story: [1080, 1920], wide: [1920, 1080] };
 const PLAY_HOLD = 2, PLAY_FADE = 0.3;   // steps the last frame stays up; the part of a step a new photo fades in over
 function playModel(opt) {
-  const [W, H] = PLAY_SHAPES[opt.shape], S = cur(), pad = 48, gap = 28;
+  const [W, H] = opt.size || PLAY_SHAPES[opt.shape], S = cur(), pad = 48, gap = 28;
   const ps = mine('photos').sort((a, b) => parseLocal(a.t) - parseLocal(b.t));
   const trs = tracksSorted().filter(t => ps.some(p => trackOf(p) === t));
   const head = S.showName && S.name ? 92 : 24, foot = 150 + (S.credit !== false ? 30 : 0), text = 74, label = 40;
@@ -1951,7 +1954,7 @@ function playModel(opt) {
     const y = head + (ah - grid.r * grid.ch - (grid.r - 1) * gap) / 2 + row * (grid.ch + gap);
     return { t, x, y, w: grid.cw, h: grid.ch, steps: ps.map((p, j) => j).filter(j => trackOf(ps[j]) === t) };
   });
-  return { W, H, pad, ps, panels, head, label, text, steps: ps.length - 1 + PLAY_HOLD, secs: (ps.length - 1 + PLAY_HOLD) * opt.pace };
+  return { W, H, pad, ps, panels, head, label, text, pace: opt.pace, steps: ps.length - 1 + PLAY_HOLD, secs: (ps.length - 1 + PLAY_HOLD) * opt.pace };
 }
 // The frame at s steps in: photo j arrives at step j
 function playFrame(ctx, M, s, k, images) {
@@ -2014,96 +2017,198 @@ function playFrame(ctx, M, s, k, images) {
   if (credit) { ctx.font = font(500, 18); ctx.fillText(CREDIT, W - pad, H - 18); }
   ctx.textAlign = 'left';
 }
-// The best video format this browser can record: MP4 where it can, for phones and social sites, else WebM
+// The frame size to fill a w × h space with: its shape, with the shorter side at the size the other shapes use
+function fillSize(w, h) {
+  const f = 1080 / Math.min(w, h);
+  return [Math.round(w * f), Math.round(h * f)];
+}
+// Plays M on a canvas, looping, with play/pause and restart. Returns controls; stops on its own once the canvas
+// leaves the page
+function player(canvas, getModel, k, images) {
+  const ctx = canvas.getContext('2d');
+  let M = getModel(), t0 = performance.now(), at = 0, paused = false;
+  const size = () => { if (canvas.width !== M.W || canvas.height !== M.H) { canvas.width = M.W; canvas.height = M.H; } };
+  const tick = now => {
+    if (!document.contains(canvas)) return;
+    if (!paused) at = Math.max(0, now - t0) / 1000;   // a frame's time can be a little before t0
+    let s = at / M.pace;
+    if (s >= M.steps) { t0 = now; at = 0; s = 0; }   // loop
+    playFrame(ctx, M, s, k(), images);
+    requestAnimationFrame(tick);
+  };
+  size();
+  requestAnimationFrame(tick);
+  return {
+    get paused() { return paused; },
+    toggle() { paused = !paused; if (!paused) t0 = performance.now() - at * 1000; return paused; },
+    restart() { t0 = performance.now(); at = 0; paused = false; },
+    rebuild() { M = getModel(); size(); }
+  };
+}
+// Full screen: the playthrough in the screen's own shape. Tap to pause; Esc or × to leave
+function openFullPlay(opt, k, images) {
+  const box = document.createElement('div');
+  box.className = 'fullplay';
+  box.innerHTML = `<canvas aria-label="Playthrough"></canvas><div class="fp-bar"><button class="btn" type="button" data-a="pause">Pause</button><button class="btn" type="button" data-a="again">From the start</button><button class="btn" type="button" data-a="close">Close</button></div>`;
+  document.body.appendChild(box);
+  const cvs = box.querySelector('canvas'), btn = a => box.querySelector(`[data-a="${a}"]`);
+  const P = player(cvs, () => playModel({ ...opt, size: fillSize(cvs.clientWidth || innerWidth, cvs.clientHeight || innerHeight) }), k, images);
+  const pause = () => { btn('pause').textContent = P.toggle() ? 'Play' : 'Pause'; };
+  const close = () => {
+    removeEventListener('resize', onResize); document.removeEventListener('keydown', onKey, true);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    box.remove();
+  };
+  const onResize = () => P.rebuild();
+  const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); } else if (e.key === ' ') { e.preventDefault(); pause(); } };
+  addEventListener('resize', onResize);
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.contains(box)) close(); }, { once: true });
+  cvs.onclick = pause;
+  btn('pause').onclick = pause;
+  btn('again').onclick = () => { P.restart(); btn('pause').textContent = 'Pause'; };
+  btn('close').onclick = close;
+  // Phones without element full screen (iPhone) still get the whole window
+  if (box.requestFullscreen) box.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  btn('pause').focus({ preventScroll: true });
+}
+
+/* Making the video. Where the browser can encode video itself (WebCodecs), frames are drawn and encoded as fast as
+   it can go, off screen, so it takes seconds and carries on when the drawer is closed; the MP4 file is put together
+   by mp4-muxer. Elsewhere the canvas is recorded as it plays, in real time. */
+const MP4_MUXER = 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs', FPS = 30;
+async function encoderSetup(W, H) {
+  if (!window.VideoEncoder || !window.VideoFrame) return null;
+  for (const [codec, mux] of [['avc1.640028', 'avc'], ['avc1.4d0028', 'avc'], ['vp09.00.40.08', 'vp9']]) {
+    const config = { codec, width: W, height: H, bitrate: 8e6, framerate: FPS, ...(mux === 'avc' ? { avc: { format: 'avc' } } : {}) };
+    try { if ((await VideoEncoder.isConfigSupported(config)).supported) return { config, mux }; } catch (e) {}
+  }
+  return null;
+}
+async function encodeVideo(opt, images, progress) {
+  const M = playModel(opt), setup = await encoderSetup(M.W, M.H);
+  if (!setup) return null;
+  let lib;
+  try { lib = await import(MP4_MUXER); } catch (e) { return null; }
+  const muxer = new lib.Muxer({ target: new lib.ArrayBufferTarget(), video: { codec: setup.mux, width: M.W, height: M.H, frameRate: FPS }, fastStart: 'in-memory' });
+  let failed = null;
+  const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { failed = e; } });
+  enc.configure(setup.config);
+  const c = document.createElement('canvas');
+  c.width = M.W; c.height = M.H;
+  const ctx = c.getContext('2d'), k = tokensFor(opt.theme), n = Math.ceil(M.secs * FPS);
+  for (let i = 0; i <= n && !failed; i++) {
+    playFrame(ctx, M, Math.min(i / FPS / M.pace, M.steps), k, images);
+    const f = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / FPS), duration: Math.round(1e6 / FPS) });
+    enc.encode(f, { keyFrame: i % (FPS * 2) === 0 });
+    f.close();
+    if (i % 15 === 0) progress(i / n);
+    while (enc.encodeQueueSize > 8) await new Promise(r => setTimeout(r, 5));   // let the encoder catch up
+  }
+  await enc.flush();
+  enc.close();
+  if (failed) throw failed;
+  muxer.finalize();
+  return new Blob([muxer.target.buffer], { type: 'video/mp4' });
+}
+// For browsers without WebCodecs: the best format MediaRecorder can record, MP4 where it can, else WebM
 function videoType() {
   if (!window.MediaRecorder) return null;
   return ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) || null;
+}
+// Plays the video once on an off-page canvas and records it, in real time
+function recordVideo(opt, images, progress) {
+  const type = videoType();
+  if (!type) return Promise.resolve(null);
+  return new Promise((res, rej) => {
+    const M = playModel(opt), c = document.createElement('canvas'), k = tokensFor(opt.theme), chunks = [];
+    c.width = M.W; c.height = M.H;
+    const ctx = c.getContext('2d');
+    playFrame(ctx, M, 0, k, images);
+    const rec = new MediaRecorder(c.captureStream(FPS), { mimeType: type, videoBitsPerSecond: 8e6 });
+    rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+    rec.onstop = () => res(new Blob(chunks, { type: type.split(';')[0] }));
+    rec.onerror = e => rej(e.error);
+    rec.start(1000);
+    const t0 = performance.now(), tick = () => {
+      const s = (performance.now() - t0) / 1000 / M.pace;
+      playFrame(ctx, M, Math.min(s, M.steps), k, images);
+      progress(s / M.steps);
+      if (s >= M.steps) rec.stop(); else setTimeout(tick, 1000 / FPS);   // a timer rather than frames, so it runs off screen
+    };
+    tick();
+  });
+}
+let videoJob = null;   // the video being made, so a second tap waits for it instead of starting another
+function makeVideo(opt, images) {
+  const key = JSON.stringify(opt) + cur().id;
+  if (videoJob && videoJob.key === key) return videoJob.p;
+  if (videoJob) { toast('Already making a video. Try again when it’s done.'); return Promise.resolve(null); }
+  const show = (f, live) => toast(`Making video… ${Math.min(99, Math.round(f * 100))}%${live ? ' Keep this page open.' : ''}`, 60000);
+  const p = (async () => {
+    show(0);
+    let b = await encodeVideo(opt, images, f => show(f)).catch(() => null);
+    if (!b) b = await recordVideo(opt, images, f => show(f, true));
+    if (!b) toast('This browser can’t make video. Chrome, Edge, Firefox and Safari can.');
+    else toast('');
+    return b;
+  })().finally(() => { videoJob = null; });
+  videoJob = { key, p };
+  return p;
 }
 function openPlay() {
   if ($('#tlPanel').hidden || !mine('photos').length) return toast('Add some photos first.');
   const opt = { shape: innerWidth < innerHeight ? 'story' : 'square', pace: 1.2, theme: 'light' };
   try { Object.assign(opt, JSON.parse(localStorage.getItem('photoTimeline.play')) || {}); } catch (e) {}
-  const type = videoType(), canShare = !!(navigator.canShare && window.File);
+  const canShare = !!(navigator.canShare && window.File);
   const segBtns = (key, vals) => `<div class="seg" role="group">${vals.map(([v, l]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(opt[key]) === String(v)}">${l}</button>`).join('')}</div>`;
   openDrawer('Play through', `
     <canvas id="pvCv" class="preview" style="max-height:380px;display:block" aria-label="Playthrough preview"></canvas>
-    <div class="row"><button class="btn" type="button" id="pvPlay">Pause</button><button class="btn" type="button" id="pvAgain">From the start</button></div>
+    <div class="row"><button class="btn" type="button" id="pvPlay">Pause</button><button class="btn" type="button" id="pvAgain">From the start</button><button class="btn" type="button" id="pvFull">Full screen</button></div>
     <p class="note">Each track gets its own panel. A photo stays up until a newer one on its track replaces it.</p>
     <div class="field">Shape${segBtns('shape', [['square', 'Square'], ['story', '9:16'], ['wide', '16:9']])}</div>
     <div class="field">Each photo${segBtns('pace', [[0.7, 'Quick'], [1.2, 'Steady'], [2, 'Slow']])}</div>
     <div class="field">Colors${segBtns('theme', [['light', 'Light'], ['dark', 'Dark']])}</div>
     <p class="note" id="pvLen"></p>
-    ${type ? `<div class="row"><button class="btn primary" type="button" id="pvSave">Save video</button>${canShare ? '<button class="btn" type="button" id="pvShare">Share…</button>' : ''}</div>`
-      : '<p class="note">This browser can’t record video. Chrome, Edge, Firefox and Safari can.</p>'}
+    <div class="row"><button class="btn primary" type="button" id="pvSave">Save video</button>${canShare ? '<button class="btn" type="button" id="pvShare">Share…</button>' : ''}</div>
     <video id="pvOut" class="preview" controls playsinline hidden style="max-height:380px"></video>`, async f => {
-    const cv2 = f.querySelector('#pvCv'), ctx = cv2.getContext('2d'), images = new Map();
-    let M, k, t0 = performance.now(), paused = false, at = 0, raf2 = 0, rec = null, blob = null;
-    const setup = () => {
-      M = playModel(opt); k = tokensFor(opt.theme);
-      cv2.width = M.W; cv2.height = M.H;
-      f.querySelector('#pvLen').textContent = `${M.ps.length} photo${M.ps.length === 1 ? '' : 's'}, ${Math.round(M.secs)} seconds.`;
-    };
-    const tick = now => {
-      if (!document.contains(cv2)) { rec && rec.state !== 'inactive' && rec.stop(); return; }   // drawer closed
-      if (!paused) at = Math.max(0, now - t0) / 1000;   // a frame's time can be a little before t0
-      const s = at / opt.pace;
-      if (s >= M.steps && !rec) { t0 = now; at = 0; }   // the preview loops
-      playFrame(ctx, M, Math.min(s, M.steps), k, images);
-      if (rec && s >= M.steps && rec.state === 'recording') rec.stop();
-      raf2 = requestAnimationFrame(tick);
-    };
-    const restart = () => { t0 = performance.now(); at = 0; paused = false; f.querySelector('#pvPlay').textContent = 'Pause'; };
+    const cv2 = f.querySelector('#pvCv'), images = new Map();
+    let k = tokensFor(opt.theme), P = null;
+    const len = () => { const M = playModel(opt); f.querySelector('#pvLen').textContent = `${M.ps.length} photo${M.ps.length === 1 ? '' : 's'}, ${Math.round(M.secs)} seconds.`; };
     f.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
-      if (rec) return;
       opt[b.dataset.k] = isNaN(+b.dataset.v) ? b.dataset.v : +b.dataset.v;
       f.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
       try { localStorage.setItem('photoTimeline.play', JSON.stringify(opt)); } catch (e) {}
-      blob = null; setup(); restart();
+      k = tokensFor(opt.theme); len();
+      if (P) { P.rebuild(); P.restart(); f.querySelector('#pvPlay').textContent = 'Pause'; }
     });
-    f.querySelector('#pvPlay').onclick = e => {
-      paused = !paused; e.target.textContent = paused ? 'Play' : 'Pause';
-      if (!paused) t0 = performance.now() - at * 1000;
-    };
-    f.querySelector('#pvAgain').onclick = restart;
+    f.querySelector('#pvPlay').onclick = e => { if (P) e.target.textContent = P.toggle() ? 'Play' : 'Pause'; };
+    f.querySelector('#pvAgain').onclick = () => { if (P) { P.restart(); f.querySelector('#pvPlay').textContent = 'Pause'; } };
+    f.querySelector('#pvFull').onclick = () => openFullPlay({ ...opt }, () => k, images);
     const base = (cur().name || 'Photo timeline').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Photo timeline';
-    const name = () => `${base}.${type.startsWith('video/mp4') ? 'mp4' : 'webm'}`;
-    // Recording plays the whole thing once in real time, so the page has to stay open and in view
-    const record = () => blob ? Promise.resolve(blob) : new Promise((res, rej) => {
-      const chunks = [];
-      rec = new MediaRecorder(cv2.captureStream(30), { mimeType: type, videoBitsPerSecond: 8e6 });
-      rec.ondataavailable = e => e.data.size && chunks.push(e.data);
-      rec.onstop = () => {
-        rec = null;
-        f.querySelectorAll('#pvSave,#pvShare,[data-k]').forEach(b => b.disabled = false);
-        if (!document.contains(cv2)) return rej(new Error('closed'));
-        blob = new Blob(chunks, { type: type.split(';')[0] });
-        const v = f.querySelector('#pvOut');
-        if (v.src) URL.revokeObjectURL(v.src);
-        v.src = URL.createObjectURL(blob); v.hidden = false;
-        toast(''); res(blob);
-      };
-      f.querySelectorAll('#pvSave,#pvShare,[data-k]').forEach(b => b.disabled = true);
-      restart();
-      rec.start(1000);
-      toast(`Recording… keep this page open for ${Math.round(M.secs)} seconds.`, (M.secs + 5) * 1000);
+    const name = b => `${base}.${b.type === 'video/mp4' ? 'mp4' : 'webm'}`;
+    const shown = b => {
+      if (!document.contains(cv2)) return;
+      const v = f.querySelector('#pvOut');
+      if (v.src) URL.revokeObjectURL(v.src);
+      v.src = URL.createObjectURL(b); v.hidden = false;
+    };
+    // The drawer can be closed while the video is made; it downloads when it's done
+    f.querySelector('#pvSave').onclick = async () => { const b = await makeVideo({ ...opt }, images); if (b) { shown(b); download(b, name(b)); toast('Video saved'); } };
+    f.querySelector('#pvShare')?.addEventListener('click', async () => {
+      const b = await makeVideo({ ...opt }, images);
+      if (!b) return;
+      shown(b);
+      const file = new File([b], name(b), { type: b.type });
+      if (!navigator.canShare({ files: [file] })) { download(b, name(b)); return toast('Video saved'); }
+      // Sharing has to follow a tap; when making the video took too long for that, the next tap shares it at once
+      try { await navigator.share({ files: [file], title: cur().name || 'Photo timeline' }); }
+      catch (err) { if (err.name === 'NotAllowedError') toast('Video ready. Tap Share again to send it.'); else if (err.name !== 'AbortError') download(b, name(b)); }
     });
-    if (type) {
-      f.querySelector('#pvSave').onclick = async () => { const b = await record().catch(() => null); if (b) { download(b, name()); toast('Video saved'); } };
-      f.querySelector('#pvShare')?.addEventListener('click', async () => {
-        const b = await record().catch(() => null);
-        if (!b) return;
-        const file = new File([b], name(), { type: b.type });
-        // Sharing has to follow a tap, and recording took a while, so ask for one more when the browser wants it
-        if (!navigator.canShare({ files: [file] })) { download(b, name()); return toast('Video saved'); }
-        try { await navigator.share({ files: [file], title: cur().name || 'Photo timeline' }); }
-        catch (err) { if (err.name === 'NotAllowedError') toast('Video ready. Tap Share again to send it.'); else if (err.name !== 'AbortError') download(b, name()); }
-      });
-    }
-    setup();
+    len();
     await document.fonts.ready;
-    await Promise.all(M.ps.map(p => loadImg(p.id).then(img => images.set(p.id, img), () => {})));
-    restart();
-    raf2 = requestAnimationFrame(tick);
+    await Promise.all(playModel(opt).ps.map(p => loadImg(p.id).then(img => images.set(p.id, img), () => {})));
+    P = player(cv2, () => playModel(opt), () => k, images);
   });
 }
 $('#playBtn').onclick = openPlay;
