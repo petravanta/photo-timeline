@@ -222,6 +222,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
     <span class="grow"></span>
     <button class="btn" id="playBtn" type="button">Play</button>
     <button class="btn" id="exportBtn" type="button">Save as image</button>
+    <button class="btn" id="driveBtn" type="button" hidden>Reconnect Drive</button>
     <button class="btn ghost" id="settingsBtn" type="button">Settings</button>
   </div>
 
@@ -410,6 +411,7 @@ function save() {
   saveTimer = setTimeout(() => {
     try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { toast('Couldn’t save in this browser. Use Settings → Export backup to keep a copy.'); }
   }, 250);
+  driveSoon();
 }
 /* Merge two copies as STANDARDS.md says: records by id (newer u wins), deletions win, newer settings win */
 function mergeDocs(a, b) {
@@ -453,7 +455,7 @@ const idb = (() => {
     tx.oncomplete = () => res(req.result);
     tx.onerror = () => rej(tx.error);
   }));
-  return { get: id => run('readonly', s => s.get(id)), put: (id, blob) => run('readwrite', s => s.put(blob, id)), del: id => run('readwrite', s => s.delete(id)) };
+  return { keys: () => run('readonly', s => s.getAllKeys()), get: id => run('readonly', s => s.get(id)), put: (id, blob) => run('readwrite', s => s.put(blob, id)), del: id => run('readwrite', s => s.delete(id)) };
 })();
 
 const imgs = new Map();   // photo id -> { img, url } once loaded, or a promise while loading
@@ -606,6 +608,161 @@ function googleProblem(e) {
   if (e instanceof TypeError) return 'This browser couldn’t reach Google Photos. Check your connection and try again.';
   return `Google Photos said: ${e.message}${e.status ? ` (${e.status})` : ''}`;
 }
+/* ---------- Google Drive sync, as STANDARDS.md describes: optional, the person's own Drive, drive.file scope ----------
+   One folder, "Photo Timeline", holds "Photo Timeline data.json" and one JPEG per photo, named by photo id. The app
+   can only see files it made. Each sync reads the Drive copy, merges it in, writes the result back, then uploads
+   photos Drive lacks, downloads photos this browser lacks, and moves deleted photos to the Drive bin. */
+const DRIVE_KEY = 'photoTimeline.drive', DRIVE_API = 'https://www.googleapis.com/drive/v3', DRIVE_UP = 'https://www.googleapis.com/upload/drive/v3';
+const DATA_NAME = 'Photo Timeline data.json';
+const Drive = { token: null, exp: 0, on: false, email: '', busy: false, again: false, timer: 0, status: '', lastSync: '', pushed: '', needsSignIn: false };
+try { Object.assign(Drive, JSON.parse(localStorage.getItem(DRIVE_KEY)) || {}); } catch (e) {}
+// The sign-in lasts an hour and is kept with the rest, so reloading the page doesn't ask again
+function driveKeep() {
+  try { localStorage.setItem(DRIVE_KEY, JSON.stringify({ on: Drive.on, email: Drive.email, lastSync: Drive.lastSync, token: Drive.token, exp: Drive.exp })); } catch (e) {}
+}
+// Google's sign-in opens a pop-up, which browsers only allow right after a tap. So prompt is null for a sync nobody
+// tapped for, which goes ahead only while the last sign-in lasts; '' renews it on a tap; 'select_account' connects,
+// asking which account, since the Drive one can differ from the photos one
+function driveToken(prompt) {
+  return new Promise(async (res, rej) => {
+    if (Drive.token && Date.now() < Drive.exp) return res();
+    if (prompt === null) return rej(new Error('needs a tap'));
+    try { await loadGis(); } catch (e) { return rej(e); }
+    google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID, scope: 'https://www.googleapis.com/auth/drive.file', prompt, login_hint: Drive.email || undefined,
+      callback: r => { if (r.error) return rej(r); Drive.token = r.access_token; Drive.exp = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000; driveKeep(); res(); },
+      error_callback: rej
+    }).requestAccessToken();
+  });
+}
+async function dfetch(url, opt = {}) {
+  const r = await fetch(url.startsWith('http') ? url : DRIVE_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + Drive.token } });
+  if (r.status === 401) { Drive.token = null; throw Object.assign(new Error('expired'), { signIn: true }); }
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw Object.assign(new Error(j.error?.message || 'HTTP ' + r.status), { status: r.status }); }
+  return r;
+}
+const dq = s => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+// Every file the app made that matches q, following pages
+async function driveList(q, fields = 'id,name,appProperties') {
+  const out = [];
+  let page = '';
+  do {
+    const r = await (await dfetch(`/files?q=${encodeURIComponent(q + ' and trashed=false')}&spaces=drive&pageSize=1000&fields=${encodeURIComponent(`nextPageToken,files(${fields})`)}${page ? '&pageToken=' + page : ''}`)).json();
+    out.push(...r.files);
+    page = r.nextPageToken;
+  } while (page);
+  return out;
+}
+async function driveUpload(meta, blob, fileId) {
+  const body = new FormData();
+  body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+  body.append('file', blob);
+  const r = await dfetch(`${DRIVE_UP}/files${fileId ? '/' + fileId : ''}?uploadType=multipart&fields=id`, { method: fileId ? 'PATCH' : 'POST', body });
+  return (await r.json()).id;
+}
+async function driveFolder() {
+  const [f] = await driveList(`appProperties has { key='pt' and value='folder' }`);
+  if (f) return f.id;
+  const r = await dfetch('/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Photo Timeline', mimeType: 'application/vnd.google-apps.folder', appProperties: { pt: 'folder' } }) });
+  return (await r.json()).id;
+}
+function driveShow(status) {
+  Drive.status = status;
+  const el = $('#driveStatus');
+  if (el) el.textContent = driveLine();
+  $('#driveBtn').hidden = !(Drive.on && Drive.needsSignIn);
+}
+function driveLine() {
+  if (!Drive.on) return '';
+  if (Drive.needsSignIn) return 'Google needs you to sign in again before this browser can sync. Tap Reconnect.';
+  if (Drive.status) return Drive.status;
+  return Drive.lastSync ? `Last synced ${F.full.format(new Date(Drive.lastSync))}.` : 'Not synced yet.';
+}
+// Merge a Drive copy into this browser's, dropping the photo files of photos deleted elsewhere
+function applyRemote(remote) {
+  const before = new Set(doc.photos.map(p => p.id));
+  // A browser that has never been used only holds the starter timeline; leave it out rather than add it everywhere
+  const fresh = doc.timelines.length === 1 && !doc.photos.length && !doc.bands.length && !doc.events.length && doc.tracks.length === 1 && remote.timelines?.length;
+  doc = fresh ? mergeDocs({ ...remote, deleted: [...(remote.deleted || []), ...doc.deleted] }, { deleted: [] }) : mergeDocs(doc, remote);
+  const after = new Set(doc.photos.map(p => p.id));
+  for (const id of before) if (!after.has(id)) { idb.del(id).catch(() => {}); forgetImg(id); }
+  Drive.applying = true;
+  changed();
+  Drive.applying = false;
+}
+async function driveSync(prompt = null) {
+  if (!Drive.on) return;
+  if (Drive.busy) { Drive.again = true; return; }
+  Drive.busy = true;
+  try {
+    try { await driveToken(prompt); }
+    catch (e) { Drive.needsSignIn = true; driveShow(''); return; }
+    Drive.needsSignIn = false;
+    driveShow('Syncing…');
+    if (!Drive.email) { try { Drive.email = (await (await dfetch('/about?fields=user(emailAddress)')).json()).user.emailAddress; driveKeep(); } catch (e) {} }
+    const folder = await driveFolder();
+    // The document
+    const [file] = await driveList(`appProperties has { key='pt' and value='data' }`);
+    if (file) {
+      const text = await (await dfetch(`/files/${file.id}?alt=media`)).text();
+      if (text !== Drive.pushed) {   // unchanged since this browser wrote it, so nothing to merge
+        let remote = null;
+        try { remote = JSON.parse(text); } catch (e) {}
+        if (remote && Array.isArray(remote.photos)) applyRemote(remote);
+      }
+    }
+    // New photos go up before the document that names them, so another device never waits on them
+    const remote = new Map((await driveList(`appProperties has { key='pt' and value='photo' }`)).map(f => [f.appProperties.pid, f.id]));
+    const here = new Set(await idb.keys()), up = doc.photos.filter(p => here.has(p.id) && !remote.has(p.id));
+    for (const [i, p] of up.entries()) {
+      driveShow(`Copying photos to Drive… ${i + 1} of ${up.length}`);
+      remote.set(p.id, await driveUpload({ name: `${p.id}.jpg`, parents: [folder], appProperties: { pt: 'photo', pid: p.id } }, await idb.get(p.id)));
+    }
+    const json = JSON.stringify(doc);
+    if (!file || json !== Drive.pushed) {
+      await driveUpload(file ? {} : { name: DATA_NAME, parents: [folder], mimeType: 'application/json', appProperties: { pt: 'data' } }, new Blob([json], { type: 'application/json' }), file && file.id);
+      Drive.pushed = json;
+    }
+    // Photos added on other devices come down; photos deleted anywhere go to the Drive bin
+    const down = doc.photos.filter(p => !here.has(p.id) && remote.has(p.id));
+    for (const [i, p] of down.entries()) {
+      driveShow(`Copying photos from Drive… ${i + 1} of ${down.length}`);
+      await idb.put(p.id, await (await dfetch(`/files/${remote.get(p.id)}?alt=media`)).blob());
+      forgetImg(p.id); fillThumbs(p.id); requestDraw(false);
+    }
+    const del = new Set(doc.deleted);
+    for (const [pid, fid] of remote) if (del.has(pid)) await dfetch(`/files/${fid}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+    Drive.lastSync = now(); driveKeep();
+    driveShow('');
+  } catch (e) {
+    if (e.signIn) { Drive.needsSignIn = true; driveShow(''); }
+    else driveShow(e instanceof TypeError ? 'Couldn’t reach Google Drive. It will try again.' : `Google Drive said: ${e.message}`);
+  } finally {
+    Drive.busy = false;
+    if (Drive.again) { Drive.again = false; driveSoon(); }
+  }
+}
+// A few seconds after each change, so a burst of edits is one sync
+function driveSoon() {
+  if (!Drive.on || Drive.applying) return;
+  clearTimeout(Drive.timer);
+  Drive.timer = setTimeout(() => driveSync(), 4000);
+}
+async function driveConnect() {
+  Drive.token = null; Drive.email = '';
+  try { await driveToken('select_account'); }
+  catch (e) { return toast(e && e.type === 'popup_closed' ? 'Google sign-in was closed.' : 'Couldn’t sign in to Google. Check that pop-ups are allowed for this site.', 5000); }
+  Drive.on = true; Drive.pushed = ''; driveKeep();
+  await driveSync('');
+  if (!Drive.needsSignIn && !/said|reach/.test(Drive.status)) toast('Synced with Google Drive');
+}
+function driveDisconnect() {
+  if (Drive.token && window.google) google.accounts.oauth2.revoke(Drive.token, () => {});
+  Object.assign(Drive, { on: false, token: null, email: '', lastSync: '', pushed: '', needsSignIn: false, status: '' });
+  driveKeep(); driveShow('');
+}
+$('#driveBtn').onclick = () => driveSync('');   // a tap, so Google may show its sign-in
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') driveSync(); });
 const secs = d => parseFloat(d) || 0;   // durations come as "5s"
 async function fromGooglePhotos() {
   try { await gphotosToken(); }
@@ -1741,12 +1898,19 @@ function openSettings() {
     <label class="cb"><input type="checkbox" id="sCredit"${S.credit !== false ? ' checked' : ''}> Add a small “Generated with Photo Timeline” line under saved images</label>
     <div class="row"><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
     <h3>Your data</h3>
-    <p class="note">Your timelines and photos are kept in this browser only. A backup file holds every timeline, photos included, so you can move them to another device.</p>
+    ${Drive.on ? `<p class="note">Synced with Google Drive${Drive.email ? ` as <b>${esc(Drive.email)}</b>` : ''}, in a folder called Photo Timeline. Every device you connect shares the same timelines and photos.</p>
+    <p class="note" id="driveStatus" role="status">${esc(driveLine())}</p>
+    <div class="row"><button class="btn" type="button" id="sSync">${Drive.needsSignIn ? 'Reconnect' : 'Sync now'}</button><button class="btn ghost" type="button" id="sDrive">Stop syncing</button></div>`
+    : `<p class="note">Your timelines and photos are kept in this browser. Connect Google Drive to keep a copy in your own Drive and use them on your other devices. The app can only see the files it puts there.</p>
+    <div class="row"><button class="btn" type="button" id="sDrive">Connect Google Drive</button></div>`}
+    <p class="note">A backup file holds every timeline, photos included.</p>
     <div class="row"><button class="btn" type="button" id="sExport">Export backup</button><button class="btn" type="button" id="sImport">Import backup</button></div>`, f => {
     const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchTimeline(); changed(); });
     set('#sStyle', 'style', 'value');
     f.querySelector('#sStyle').addEventListener('input', () => { f.querySelector('#sStyleNote').textContent = look().note; });
     set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sAgeAs', 'ageAs', 'value'); set('#sAgeFrom', 'ageFrom', 'value'); set('#sCredit', 'credit');
+    f.querySelector('#sDrive').onclick = async () => { if (Drive.on) driveDisconnect(); else await driveConnect(); if (document.contains(f)) openSettings(); };
+    f.querySelector('#sSync')?.addEventListener('click', () => driveSync(''));
     f.querySelector('#sExport').onclick = exportBackup;
     f.querySelector('#sImport').onclick = () => $('#backupIn').click();
     wireDelete(f.querySelector('#sDel'), n ? `Tap again to delete it and its ${n} photo${n === 1 ? '' : 's'}` : 'Tap again to delete it', () => deleteTimeline(S));
@@ -2318,6 +2482,7 @@ renderUI();
 requestDraw();
 document.fonts && document.fonts.ready.then(() => requestDraw());
 addEventListener('storage', e => { if (e.key === KEY) { doc = load(); changed(); } });
+if (Drive.on) driveSync();   // the Drive copy may have changed on another device
 </script>
 <script src="https://petravanta.github.io/general/shared/hub-link.js" defer></script>
 <script src="https://petravanta.github.io/general/shared/theme-switch.js" defer></script>
