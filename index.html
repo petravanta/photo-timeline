@@ -611,6 +611,50 @@ function googleProblem(e) {
   if (e instanceof TypeError) return 'This browser couldn’t reach Google Photos. Check your connection and try again.';
   return `Google Photos said: ${e.message}${e.status ? ` (${e.status})` : ''}`;
 }
+/* ===== Google sign-in shared by petravanta's apps =====
+   Canonical copy: https://github.com/petravanta/general/blob/main/shared/google-token.js (see STANDARDS.md, "Staying connected to Google Drive").
+   Every app lives on petravanta.github.io and uses the same OAuth client, so a Drive token one app gets works in all of them.
+   This keeps that token where every app can see it (localStorage key petravanta.google), one per Google account, so
+   reconnecting in one app reconnects them all, and an app only ever uses the token of the account it connected with.
+   Google gives a static site no refresh token: a token lasts an hour, and getting a new one opens Google's window,
+   which browsers only allow right after a tap. With the account's email as a hint, that window closes by itself. */
+const GoogleToken=(()=>{
+  const KEY='petravanta.google', SCOPE='https://www.googleapis.com/auth/drive.file';
+  const read=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'null')||{}}catch(e){return {}}};
+  const write=v=>{try{localStorage.setItem(KEY,JSON.stringify(v))}catch(e){}};
+  const subs=[];
+  // Another tab or app on this site got a token: let this one pick it up without a tap
+  window.addEventListener('storage',e=>{if(e.key===KEY) subs.forEach(f=>{try{f()}catch(_){}})});
+  function gis(){return new Promise((res,rej)=>{
+    if(window.google&&google.accounts&&google.accounts.oauth2) return res();
+    const s=document.createElement('script'); s.src='https://accounts.google.com/gsi/client'; s.onload=res; s.onerror=()=>rej({code:'offline'}); document.head.appendChild(s)})}
+  // A token for this account with time left on it, or null
+  function get(email){const t=email&&(read().tokens||{})[email]; return t&&t.exp>Date.now()?t:null}
+  // o: {clientId, hint:'email to suggest', prompt:'' | 'select_account' | 'consent'}. Call from a tap. Resolves {token, exp, email}.
+  function request(o){return new Promise(async(res,rej)=>{
+    try{await gis()}catch(e){return rej(e)}
+    google.accounts.oauth2.initTokenClient({client_id:o.clientId,scope:SCOPE,login_hint:o.hint||undefined,error_callback:rej,
+      callback:async r=>{
+        if(r.error) return rej(r);
+        const t={token:r.access_token,exp:Date.now()+(Number(r.expires_in||3600)-60)*1000};
+        // Which account it is, so the token is filed under the right one
+        let email='';
+        try{const j=await (await fetch('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',{headers:{Authorization:'Bearer '+t.token}})).json(); email=(j.user&&j.user.emailAddress)||''}catch(e){}
+        if(!email) email=o.hint||'';
+        if(email){
+          const v=read(), now=Date.now(); v.tokens=v.tokens||{};
+          for(const k in v.tokens) if(!(v.tokens[k].exp>now)) delete v.tokens[k];
+          v.tokens[email]=t; v.last=email; write(v);
+        }
+        res({...t,email});
+      }
+    }).requestAccessToken({prompt:o.prompt||''});
+  })}
+  // Signing out on this browser. Google's permission stays, since the other apps and devices still use it.
+  function forget(email){const v=read(); if(v.tokens&&email) delete v.tokens[email]; write(v)}
+  return {get,request,forget,gis,onChange:f=>subs.push(f),get lastEmail(){return read().last||''}};
+})();
+/* ===== end Google sign-in ===== */
 /* ---------- Google Drive sync, as STANDARDS.md describes: optional, the person's own Drive, drive.file scope ----------
    One folder, "Photo Timeline", holds "Photo Timeline data.json" and one JPEG per photo, named by photo id. The app
    can only see files it made. Each sync reads the Drive copy, merges it in, writes the result back, then uploads
@@ -626,21 +670,20 @@ function driveKeep() {
 // Google's sign-in opens a pop-up, which browsers only allow right after a tap. So prompt is null for a sync nobody
 // tapped for, which goes ahead only while the last sign-in lasts; '' renews it on a tap; 'select_account' connects,
 // asking which account, since the Drive one can differ from the photos one
-function driveToken(prompt) {
-  return new Promise(async (res, rej) => {
-    if (Drive.token && Date.now() < Drive.exp) return res();
-    if (prompt === null) return rej(new Error('needs a tap'));
-    try { await loadGis(); } catch (e) { return rej(e); }
-    google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID, scope: 'https://www.googleapis.com/auth/drive.file', prompt, login_hint: Drive.email || undefined,
-      callback: r => { if (r.error) return rej(r); Drive.token = r.access_token; Drive.exp = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000; driveKeep(); res(); },
-      error_callback: rej
-    }).requestAccessToken();
-  });
+async function driveToken(prompt) {
+  // Another app on this site may already have a fresh token for this account (GoogleToken above)
+  const g = GoogleToken.get(Drive.email);
+  if (g && g.exp > Drive.exp) { Drive.token = g.token; Drive.exp = g.exp; }
+  if (Drive.token && Date.now() < Drive.exp) return;
+  if (prompt === null) throw new Error('needs a tap');
+  const r = await GoogleToken.request({ clientId: GOOGLE_CLIENT_ID, hint: Drive.email || GoogleToken.lastEmail, prompt });
+  Drive.token = r.token; Drive.exp = r.exp;
+  if (r.email) Drive.email = r.email;
+  driveKeep();
 }
 async function dfetch(url, opt = {}) {
   const r = await fetch(url.startsWith('http') ? url : DRIVE_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + Drive.token } });
-  if (r.status === 401) { Drive.token = null; throw Object.assign(new Error('expired'), { signIn: true }); }
+  if (r.status === 401) { Drive.token = null; Drive.exp = 0; GoogleToken.forget(Drive.email); throw Object.assign(new Error('expired'), { signIn: true }); }
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw Object.assign(new Error(j.error?.message || 'HTTP ' + r.status), { status: r.status }); }
   return r;
 }
@@ -760,12 +803,27 @@ async function driveConnect() {
   if (!Drive.needsSignIn && !/said|reach/.test(Drive.status)) toast('Synced with Google Drive');
 }
 function driveDisconnect() {
-  if (Drive.token && window.google) google.accounts.oauth2.revoke(Drive.token, () => {});
+  // Forget the sign-in on this browser only: Google's permission stays for the other apps and devices
+  GoogleToken.forget(Drive.email);
   Object.assign(Drive, { on: false, token: null, email: '', lastSync: '', pushed: '', needsSignIn: false, status: '' });
   driveKeep(); driveShow('');
 }
 $('#driveBtn').onclick = () => driveSync('');   // a tap, so Google may show its sign-in
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') driveSync(); });
+// The sign-in lasts an hour. Renew it on any tap once it is close to running out, since only a tap may open Google's window;
+// for an account that already agreed, the window closes by itself
+document.addEventListener('click', e => {
+  if (!Drive.on || Drive.busy || e.target.closest('#driveBtn, #sDrive, #sSync')) return;
+  const g = GoogleToken.get(Drive.email), exp = Math.max(Drive.exp, g ? g.exp : 0);
+  if (exp - Date.now() > 10 * 60000 || Date.now() - (Drive.asked || 0) < 5 * 60000) return;
+  Drive.asked = Date.now();
+  GoogleToken.request({ clientId: GOOGLE_CLIENT_ID, hint: Drive.email, prompt: '' }).then(r => {
+    Drive.token = r.token; Drive.exp = r.exp; if (r.email) Drive.email = r.email; driveKeep(); driveSync();
+  }).catch(() => {});
+}, true);
+// Another app or tab reconnected this account: carry on with its token
+GoogleToken.onChange(() => { if (Drive.on && GoogleToken.get(Drive.email)) driveSync(); });
+if (Drive.on) GoogleToken.gis().catch(() => {});   // loaded before the tap, so the browser lets its window open
 const secs = d => parseFloat(d) || 0;   // durations come as "5s"
 async function fromGooglePhotos() {
   try { await gphotosToken(); }
