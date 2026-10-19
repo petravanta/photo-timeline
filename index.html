@@ -1962,28 +1962,36 @@ function playFrame(ctx, M, s, k, images) {
     ctx.fillText(fit(ctx, S.name, W - 2 * pad), pad, 66);
   }
   for (const P of M.panels) {
-    const col = k.c[P.t.color] || k.accent;
-    ctx.font = font(700, 22); ctx.fillStyle = col;
-    ctx.fillText(fit(ctx, P.t.name || 'Track', P.w), P.x, P.y + 26);
-    const box = { x: P.x, y: P.y + M.label, w: P.w, h: P.h - M.label - M.text };
-    const shown = P.steps.filter(j => j <= s), j = shown[shown.length - 1];
-    if (j === undefined) {   // this track's first photo is still to come
-      ctx.fillStyle = k.sunk; rr(ctx, box.x, box.y, box.w, box.h, st.radius); ctx.fill();
-      continue;
-    }
-    // Contain the photo in the box, so nothing is cut beyond the person's own crop, just under the track's name
-    const place = p => { const a = aspect(p), w = Math.min(box.w, box.h * a), h = w / a; return { left: box.x, top: box.y, w, h, p }; };
-    const fade = clamp((s - j) / PLAY_FADE, 0, 1), prev = shown[shown.length - 2];
-    if (prev !== undefined && fade < 1) drawPhoto(ctx, place(ps[prev]), k, { images, plain: true });
-    ctx.globalAlpha = fade;
-    const it = place(ps[j]);
-    drawPhoto(ctx, it, k, { images, plain: true });
-    // Date and caption right under the photo
-    const p = ps[j], by = it.top + it.h;
-    ctx.font = font(600, 24); ctx.fillStyle = k.ink;
-    ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), P.w), P.x, by + 34);
-    if (p.caption) { ctx.font = font(500, 21); ctx.fillStyle = k.muted; ctx.fillText(fit(ctx, p.caption, P.w), P.x, by + 62); }
-    ctx.globalAlpha = 1;
+    const col = k.c[P.t.color] || k.accent, room = { w: P.w, h: P.h - M.label - M.text };
+    // The track's name, the photo as large as the panel allows without cutting it, then its date and caption,
+    // centered together in the panel
+    const place = p => {   // with no photo yet, an empty frame the shape of the track's first photo
+      const a = aspect(p || ps[P.steps[0]]), w = Math.min(room.w, room.h * a), h = w / a;
+      return { left: P.x + (P.w - w) / 2, top: P.y + (P.h - h - M.label - M.text) / 2 + M.label, w, h, p };
+    };
+    const group = (it, a) => {
+      ctx.globalAlpha = a;
+      const cx = it.left + it.w / 2;
+      ctx.textAlign = 'center';
+      ctx.font = font(700, 22); ctx.fillStyle = col;
+      ctx.fillText(fit(ctx, P.t.name || 'Track', P.w), cx, it.top - 14);
+      if (it.p) {
+        drawPhoto(ctx, it, k, { images, plain: true });
+        const p = it.p, by = it.top + it.h;
+        ctx.textAlign = 'center';
+        ctx.font = font(600, 24); ctx.fillStyle = k.ink;
+        ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), P.w), cx, by + 34);
+        if (p.caption) { ctx.font = font(500, 21); ctx.fillStyle = k.muted; ctx.fillText(fit(ctx, p.caption, P.w), cx, by + 62); }
+      } else {   // this track's first photo is still to come
+        ctx.fillStyle = k.sunk; rr(ctx, it.left, it.top, it.w, it.h, st.radius); ctx.fill();
+      }
+      ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    };
+    const shown = P.steps.filter(j => j <= s), j = shown[shown.length - 1], prev = shown[shown.length - 2];
+    if (j === undefined) { group(place(null), 1); continue; }
+    const fade = clamp((s - j) / PLAY_FADE, 0, 1);
+    if (fade < 1) group(place(prev === undefined ? null : ps[prev]), 1 - fade);
+    group(place(ps[j]), fade);
   }
   // A strip along the bottom: a dot per photo in its track's color, and the playhead
   const credit = S.credit !== false, base = H - (credit ? 30 : 0) - 46, x0 = pad + 8, x1 = W - pad - 8;
