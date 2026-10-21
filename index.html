@@ -996,7 +996,9 @@ function packLanes(items) {
   }
   return used.length;
 }
-function layout(viewW, frozen, shift = 0) {
+// extra: more width for the time scale than the view has, when photos nudged aside would otherwise spill past the
+// first or last date (common on a phone, where photos are wide for the screen)
+function layout(viewW, frozen, shift = 0, extra = 0, tries = 0) {
   const S = cur(), tracks = tracksSorted(), photos = mine('photos'), bands = mine('bands'), events = mine('events');
   let lo = Infinity, hi = -Infinity;
   const see = t => { if (isFinite(t)) { lo = Math.min(lo, t); hi = Math.max(hi, t); } };
@@ -1023,7 +1025,7 @@ function layout(viewW, frozen, shift = 0) {
   const L = { viewW, tracks: [], photos: [], bands: [], events: [], lo, hi };
   if (frozen) Object.assign(L, frozen);
   else {
-    const avail = viewW - 2 * PADX - edgeL - edgeR;
+    const avail = viewW + extra - 2 * PADX - edgeL - edgeR;
     const skips = S.skipGaps ? emptyStretches(points, lo, hi, avail, S.zoom || 1) : [];
     const shown = hi - lo - skips.reduce((a, g) => a + g.b - g.a, 0);
     L.ppd = Math.max(1e-4, (avail - skips.reduce((a, g) => a + g.cost, 0)) / (shown / DAY)) * (S.zoom || 1);
@@ -1045,7 +1047,8 @@ function layout(viewW, frozen, shift = 0) {
   const xOf = L.xOf = t => { const g = segAt('t', t); return g.x + (t - g.t) * g.k; };
   L.tOf = x => { const g = segAt('x', x); return g.t + (x - g.x) / g.k; };
 
-  let y = PADY, minX = Infinity, maxX = xOf(hi) + edgeR;
+  let y = PADY, minX = Infinity, maxX = xOf(hi) + edgeR, pL = Infinity, pR = -Infinity;
+  L.xA = xOf(lo) - edgeL; L.xZ = xOf(hi) + edgeR;   // the stretch of time the timeline covers, with room for the end photos
   if (S.showName && S.name) { L.titleY = y + 20; y += 40; }
   L.bodyTop = y;
 
@@ -1091,14 +1094,17 @@ function layout(viewW, frozen, shift = 0) {
     T.base = y + HEAD + rows * h + (rows - 1) * ROW_GAP + STEM;
     T.bottom = T.base + TRACK_FOOT;
     for (const it of ps) it.top = T.base - STEM - h - it.row * (h + ROW_GAP);   // row 0 sits nearest the line
-    for (const it of ps) { minX = Math.min(minX, it.left, it.ax); maxX = Math.max(maxX, it.left + it.w); L.photos.push(it); }
+    for (const it of ps) { minX = Math.min(minX, it.left, it.ax); maxX = Math.max(maxX, it.left + it.w); pL = Math.min(pL, it.left); pR = Math.max(pR, it.left + it.w); L.photos.push(it); }
     L.tracks.push(T);
     y = T.bottom;
   }
   L.tracksBottom = y;
   L.axisY = y + 4;
   L.H = Math.ceil(L.axisY + AXIS + PADY - 6);
-  if (!frozen && minX < PADX && !shift) return layout(viewW, null, PADX - minX);
+  // Photos pushed past the first or last date stretch the time scale instead, so the axis runs under them
+  const over = Math.max(0, pR - L.xZ) + Math.max(0, L.xA - pL);
+  if (!frozen && over > 8 && tries < 4) return layout(viewW, null, 0, extra + over, tries + 1);
+  if (!frozen && minX < PADX && !shift) return layout(viewW, null, PADX - minX, extra, tries);
   L.W = Math.ceil(Math.max(viewW, maxX + PADX));
   return L;
 }
@@ -1223,7 +1229,7 @@ function draw(ctx, L, o) {
     ctx.fillRect(it.left, L.tracksTop, it.right - it.left, L.tracksBottom - L.tracksTop);
   }
   // Grid
-  const tk = visTicks(L, x0 - 80, x1 + 80);
+  const tk = visTicks(L, Math.max(x0 - 80, L.xA), Math.min(x1 + 80, L.xZ));   // dates only where the timeline has them
   ctx.lineWidth = 1;
   for (const t of tk) {
     const x = Math.round(L.xOf(t.t)) + 0.5;
@@ -1310,7 +1316,7 @@ function draw(ctx, L, o) {
   }
   // Axis, broken where an empty stretch is skipped
   ctx.strokeStyle = k.muted; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(x0, L.axisY + 0.5); ctx.lineTo(x1, L.axisY + 0.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(Math.max(x0, L.xA), L.axisY + 0.5); ctx.lineTo(Math.min(x1, L.xZ), L.axisY + 0.5); ctx.stroke();
   for (const g of L.segs) {
     if (!g.skip || !vis(g.x, g.x + BREAK_W)) continue;
     const a = g.x + 8, b = g.x + BREAK_W - 8, y = L.axisY + 0.5;
