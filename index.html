@@ -328,6 +328,8 @@ const F = {
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
 /* Age labels: how long after the timeline's start date a photo was taken, as an age, a week or a day count */
+// A photo's place against each of the timeline's reference dates: "HRT 1 yr 2 mo", "FFS 3 mo before", "HRT Week 5"
+const refLines = (S, t) => (S.refs || []).filter(r => r.from && r.as).map(r => (r.name ? r.name.trim() + ' ' : '') + ageLabel(r.from, t, r.as));
 function ageLabel(from, t, as) {
   const a = parseLocal(from), b = startOfDay(parseLocal(t)), before = b < a;
   const d = Math.round(Math.abs(b - a) / DAY);
@@ -381,6 +383,11 @@ function upgrade(d) {
   if (!d || typeof d !== 'object') return blankDoc();
   for (const k of [...RECORDS, 'deleted']) if (!Array.isArray(d[k])) d[k] = [];
   const old = d.settings || {};
+  // One "counting from" date became a list of named reference dates
+  for (const t of d.timelines) if (!Array.isArray(t.refs)) {
+    t.refs = t.ageFrom && t.ageAs ? [{ id: uid(), name: '', from: t.ageFrom, as: t.ageAs }] : [];
+    delete t.ageFrom; delete t.ageAs;
+  }
   if (!d.timelines.length) {
     // A version 1 document: its settings become its one timeline
     const tl = blankTimeline(old.title || 'My timeline');
@@ -1371,7 +1378,7 @@ function drawPhoto(ctx, it, k, o) {
   // A caption that doesn't fit wraps to a second line when the photo is tall enough to spare it
   if (S.captions && p.caption) lines.push(...wrap(ctx, p.caption, w - 12, h >= 80 ? 2 : 1));
   if (S.dates) lines.push(F.dmy.format(parseLocal(p.t)));
-  if (S.ageFrom && S.ageAs) lines.push(ageLabel(S.ageFrom, p.t, S.ageAs));
+  lines.push(...refLines(S, p.t));
   if (lines.length && w >= 56 && h >= 48 && !o.plain) {
     const sh = 8 + lines.length * 15;
     ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(left, top + h - sh, w, sh);
@@ -2002,9 +2009,9 @@ function openSettings() {
     <label class="cb"><input type="checkbox" id="sDates"${S.dates ? ' checked' : ''}> Show dates on photos</label>
     <label class="cb"><input type="checkbox" id="sShade"${S.shading ? ' checked' : ''}> Shade bands across the tracks</label>
     <label class="cb"><input type="checkbox" id="sGaps"${S.skipGaps ? ' checked' : ''}> Squeeze long empty stretches on the time line</label>
-    <div class="inline"><label class="field">Age or count on photos<select id="sAgeAs"><option value="">Off</option>${[['age', 'Age (2 yrs 3 mo)'], ['weeks', 'Week number'], ['days', 'Day number']].map(([v, n]) => `<option value="${v}"${S.ageAs === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
-    <label class="field">Counting from<input type="date" id="sAgeFrom" value="${esc(S.ageFrom || '')}"></label></div>
-    <p class="note">For a birthday, a first day or a start date. Each photo shows how long after it was taken.</p>
+    <div class="field">Time since<div id="sRefs" style="display:flex;flex-direction:column;gap:10px;text-transform:none;letter-spacing:0;font-weight:400"></div></div>
+    <div class="row"><button class="btn sm" type="button" id="sAddRef">+ Add a date</button></div>
+    <p class="note">Name dates that matter, like a birthday, starting HRT or a surgery. Each photo shows how long before or after each one it was taken.</p>
     <label class="cb"><input type="checkbox" id="sCredit"${S.credit !== false ? ' checked' : ''}> Add a small “Generated with Photo Timeline” line under saved images</label>
     <div class="row"><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
     <h3>Your data</h3>
@@ -2018,9 +2025,29 @@ function openSettings() {
     const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchTimeline(); changed(); });
     set('#sStyle', 'style', 'value');
     f.querySelector('#sStyle').addEventListener('input', () => { f.querySelector('#sStyleNote').textContent = look().note; });
-    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sAgeAs', 'ageAs', 'value'); set('#sAgeFrom', 'ageFrom', 'value'); set('#sCredit', 'credit');
+    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sCredit', 'credit');
     f.querySelector('#sDrive').onclick = async () => { if (Drive.on) driveDisconnect(); else await driveConnect(); if (document.contains(f)) openSettings(); };
     f.querySelector('#sSync')?.addEventListener('click', () => driveSync(''));
+    // Reference dates: a row each, edited in place
+    const refs = () => {
+      const box = f.querySelector('#sRefs');
+      box.innerHTML = (S.refs || []).map((r, i) => `<div class="inline" data-ref="${i}">
+        <label class="field" style="flex:1 1 120px">Name<input type="text" data-k="name" value="${esc(r.name)}" placeholder="HRT"></label>
+        <label class="field">Date<input type="date" data-k="from" value="${esc(r.from || '')}"></label>
+        <label class="field">Show as<select data-k="as">${[['age', 'Time (1 yr 3 mo)'], ['weeks', 'Week number'], ['days', 'Day number']].map(([v, n]) => `<option value="${v}"${r.as === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+        <button class="btn sm ghost" type="button" data-del aria-label="Remove ${esc(r.name || 'this date')}">Remove</button></div>`).join('');
+      box.querySelectorAll('[data-ref]').forEach(row => {
+        const r = S.refs[+row.dataset.ref];
+        row.querySelectorAll('[data-k]').forEach(el => el.addEventListener('input', () => { r[el.dataset.k] = el.value; touchTimeline(); changed(); }));
+        row.querySelector('[data-del]').onclick = () => { S.refs.splice(+row.dataset.ref, 1); touchTimeline(); changed(); refs(); };
+      });
+    };
+    refs();
+    f.querySelector('#sAddRef').onclick = () => {
+      (S.refs ||= []).push({ id: uid(), name: '', from: '', as: 'age' });
+      touchTimeline(); changed(); refs();
+      f.querySelector('#sRefs [data-ref]:last-child [data-k="name"]').focus();
+    };
     f.querySelector('#sExport').onclick = exportBackup;
     f.querySelector('#sImport').onclick = () => $('#backupIn').click();
     wireDelete(f.querySelector('#sDel'), n ? `Tap again to delete it and its ${n} photo${n === 1 ? '' : 's'}` : 'Tap again to delete it', () => deleteTimeline(S));
@@ -2200,7 +2227,7 @@ async function beforeAfter(a, b, opt) {
     const x = opt.stack ? pad : pad + i * (tw + gap), y = opt.stack ? head + i * (th + label + gap) : head;
     drawPhoto(ctx, { left: x, top: y, w: tw, h: th, p }, k, { images: new Map([[p.id, img]]), plain: true });
     ctx.fillStyle = k.ink; ctx.font = font(600, 20);
-    ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), tw), x, y + th + 30);
+    ctx.fillText(fit(ctx, [F.dmy.format(parseLocal(p.t)), ...refLines(S, p.t)].join(' · '), tw), x, y + th + 30);
     if (p.caption) { ctx.fillStyle = k.muted; ctx.font = font(500, 17); ctx.fillText(fit(ctx, p.caption, tw), x, y + th + 54); }
   });
   if (credit) { ctx.font = font(500, 13); ctx.fillStyle = k.muted; ctx.textAlign = 'right'; ctx.fillText(CREDIT, W - pad, H - 14); }
@@ -2257,7 +2284,7 @@ function playFrame(ctx, M, s, k, images) {
         const p = it.p, by = it.top + it.h;
         ctx.textAlign = 'center';
         ctx.font = font(600, 24); ctx.fillStyle = k.ink;
-        ctx.fillText(fit(ctx, F.dmy.format(parseLocal(p.t)) + (S.ageFrom && S.ageAs ? ` · ${ageLabel(S.ageFrom, p.t, S.ageAs)}` : ''), P.w), cx, by + 34);
+        ctx.fillText(fit(ctx, [F.dmy.format(parseLocal(p.t)), ...refLines(S, p.t)].join(' · '), P.w), cx, by + 34);
         if (p.caption) { ctx.font = font(500, 21); ctx.fillStyle = k.muted; ctx.fillText(fit(ctx, p.caption, P.w), cx, by + 62); }
       } else {   // this track's first photo is still to come
         ctx.fillStyle = k.sunk; rr(ctx, it.left, it.top, it.w, it.h, st.radius); ctx.fill();
