@@ -328,8 +328,17 @@ const F = {
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
 /* Age labels: how long after the timeline's start date a photo was taken, as an age, a week or a day count */
-// A photo's place against each of the timeline's reference dates: "HRT 1 yr 2 mo", "FFS 3 mo before", "HRT Week 5"
-const refLines = (S, t) => (S.refs || []).filter(r => r.from && r.as).map(r => (r.name ? r.name.trim() + ' ' : '') + ageLabel(r.from, t, r.as));
+// A photo's place against the timeline's reference dates: "Move 1 yr 2 mo", "New job 3 mo before", "Move Week 5".
+// With refLatest, only the most recent date on or before the photo counts (the first one, for photos before them all).
+const refLines = (S, t) => {
+  let rs = (S.refs || []).filter(r => r.from && r.as);
+  if (S.refLatest && rs.length > 1) {
+    rs = [...rs].sort((a, b) => a.from < b.from ? -1 : a.from > b.from ? 1 : 0);
+    const day = t.slice(0, 10);
+    rs = [rs.findLast(r => r.from <= day) || rs[0]];
+  }
+  return rs.map(r => (r.name ? r.name.trim() + ' ' : '') + ageLabel(r.from, t, r.as));
+};
 function ageLabel(from, t, as) {
   const a = parseLocal(from), b = startOfDay(parseLocal(t)), before = b < a;
   const d = Math.round(Math.abs(b - a) / DAY);
@@ -2011,7 +2020,8 @@ function openSettings() {
     <label class="cb"><input type="checkbox" id="sGaps"${S.skipGaps ? ' checked' : ''}> Squeeze long empty stretches on the time line</label>
     <div class="field">Time since<div id="sRefs" style="display:flex;flex-direction:column;gap:10px;text-transform:none;letter-spacing:0;font-weight:400"></div></div>
     <div class="row"><button class="btn sm" type="button" id="sAddRef">+ Add a date</button></div>
-    <p class="note">Name dates that matter, like a birthday, starting HRT or a surgery. Each photo shows how long before or after each one it was taken.</p>
+    <p class="note">Name dates that matter, like a birthday, a move or a new job. Each photo shows how long before or after each one it was taken.</p>
+    <label class="cb"><input type="checkbox" id="sRefLatest"${S.refLatest ? ' checked' : ''}> Count only from the latest date that has passed</label>
     <label class="cb"><input type="checkbox" id="sCredit"${S.credit !== false ? ' checked' : ''}> Add a small “Generated with Photo Timeline” line under saved images</label>
     <div class="row"><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
     <h3>Your data</h3>
@@ -2025,14 +2035,14 @@ function openSettings() {
     const set = (sel, key, prop = 'checked') => f.querySelector(sel).addEventListener('input', e => { S[key] = e.target[prop]; touchTimeline(); changed(); });
     set('#sStyle', 'style', 'value');
     f.querySelector('#sStyle').addEventListener('input', () => { f.querySelector('#sStyleNote').textContent = look().note; });
-    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sCredit', 'credit');
+    set('#sName', 'name', 'value'); set('#sShow', 'showName'); set('#sCap', 'captions'); set('#sDates', 'dates'); set('#sShade', 'shading'); set('#sGaps', 'skipGaps'); set('#sCredit', 'credit'); set('#sRefLatest', 'refLatest');
     f.querySelector('#sDrive').onclick = async () => { if (Drive.on) driveDisconnect(); else await driveConnect(); if (document.contains(f)) openSettings(); };
     f.querySelector('#sSync')?.addEventListener('click', () => driveSync(''));
     // Reference dates: a row each, edited in place
     const refs = () => {
       const box = f.querySelector('#sRefs');
       box.innerHTML = (S.refs || []).map((r, i) => `<div class="inline" data-ref="${i}">
-        <label class="field" style="flex:1 1 120px">Name<input type="text" data-k="name" value="${esc(r.name)}" placeholder="HRT"></label>
+        <label class="field" style="flex:1 1 120px">Name<input type="text" data-k="name" value="${esc(r.name)}" placeholder="New job"></label>
         <label class="field">Date<input type="date" data-k="from" value="${esc(r.from || '')}"></label>
         <label class="field">Show as<select data-k="as">${[['age', 'Time (1 yr 3 mo)'], ['weeks', 'Week number'], ['days', 'Day number']].map(([v, n]) => `<option value="${v}"${r.as === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
         <button class="btn sm ghost" type="button" data-del aria-label="Remove ${esc(r.name || 'this date')}">Remove</button></div>`).join('');
