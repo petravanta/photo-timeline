@@ -328,7 +328,7 @@ const F = {
 const showDay = s => F.dmy.format(parseLocal(s));
 const showTime = s => F.full.format(parseLocal(s));
 /* Age labels: how long after the timeline's start date a photo was taken, as an age, a week or a day count */
-// A photo's place against the timeline's reference dates: "Move 1 yr 2 mo", "New job 3 mo before", "Move Week 5".
+// A photo's place against the timeline's reference dates: "1 yr 2 mo Move", "3 mo before New job", "Week 5 Move".
 // With refLatest, only the most recent date on or before the photo counts (the first one, for photos before them all).
 const refLines = (S, t) => {
   let rs = (S.refs || []).filter(r => r.from && r.as);
@@ -337,7 +337,7 @@ const refLines = (S, t) => {
     const day = t.slice(0, 10);
     rs = [rs.findLast(r => r.from <= day) || rs[0]];
   }
-  return rs.map(r => (r.name ? r.name.trim() + ' ' : '') + ageLabel(r.from, t, r.as));
+  return rs.map(r => ageLabel(r.from, t, r.as) + (r.name?.trim() ? ' ' + r.name.trim() : ''));
 };
 function ageLabel(from, t, as) {
   const a = parseLocal(from), b = startOfDay(parseLocal(t)), before = b < a;
