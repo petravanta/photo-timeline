@@ -2023,7 +2023,7 @@ function openSettings() {
     <p class="note">Name dates that matter, like a birthday, a move or a new job. Each photo shows how long before or after each one it was taken.</p>
     <label class="cb"><input type="checkbox" id="sRefLatest"${S.refLatest ? ' checked' : ''}> Count only from the latest date that has passed</label>
     <label class="cb"><input type="checkbox" id="sCredit"${S.credit !== false ? ' checked' : ''}> Add a small “Generated with Photo Timeline” line under saved images</label>
-    <div class="row"><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
+    <div class="row"><button class="btn" type="button" id="sCopy">Make a copy</button><button class="btn danger" type="button" id="sDel">Delete this timeline</button></div>
     <h3>Your data</h3>
     ${Drive.on ? `<p class="note">Synced with Google Drive${Drive.email ? ` as <b>${esc(Drive.email)}</b>` : ''}, in a folder called Photo Timeline. Every device you connect shares the same timelines and photos.</p>
     <p class="note" id="driveStatus" role="status">${esc(driveLine())}</p>
@@ -2058,6 +2058,7 @@ function openSettings() {
       touchTimeline(); changed(); refs();
       f.querySelector('#sRefs [data-ref]:last-child [data-k="name"]').focus();
     };
+    f.querySelector('#sCopy').onclick = async e => { e.target.disabled = true; await copyTimeline(S); openSettings(); $('#sName')?.select(); };
     f.querySelector('#sExport').onclick = exportBackup;
     f.querySelector('#sImport').onclick = () => $('#backupIn').click();
     wireDelete(f.querySelector('#sDel'), n ? `Tap again to delete it and its ${n} photo${n === 1 ? '' : 's'}` : 'Tap again to delete it', () => deleteTimeline(S));
@@ -2092,6 +2093,31 @@ function newTimeline() {
   openSettings();
   const name = $('#sName');
   if (name) name.select();
+}
+// A copy is a timeline of its own: new records throughout and its own copy of each photo file, so editing or
+// deleting either one leaves the other as it was
+async function copyTimeline(tl) {
+  const t = now(), copy = { ...structuredClone(tl), id: uid(), name: `${tl.name || 'Untitled timeline'} copy`, created: t, u: t };
+  copy.refs = (copy.refs || []).map(r => ({ ...r, id: uid() }));
+  const ids = new Map(), dup = r => { const n = { ...structuredClone(r), id: uid(), timeline: copy.id, u: t }; ids.set(r.id, n.id); return n; };
+  const tracks = doc.tracks.filter(r => r.timeline === tl.id).map(dup);
+  const photos = [];
+  let missing = 0;
+  for (const p of doc.photos.filter(r => r.timeline === tl.id)) {
+    const blob = await idb.get(p.id).catch(() => null);
+    if (!blob) { missing++; continue; }   // still on its way down from Drive
+    const n = dup(p);
+    n.track = ids.get(p.track) || p.track;
+    await idb.put(n.id, blob);
+    photos.push(n);
+  }
+  doc.timelines.push(copy);
+  doc.tracks.push(...tracks);
+  doc.photos.push(...photos);
+  for (const k of ['bands', 'events']) doc[k].push(...doc[k].filter(r => r.timeline === tl.id).map(r => { const n = dup(r); if (n.track) n.track = ids.get(n.track) || n.track; return n; }));
+  save();
+  switchTo(copy.id);
+  toast(missing ? `Copied. ${missing} photo${missing === 1 ? ' is' : 's are'} still coming from Drive and ${missing === 1 ? 'was' : 'were'} left out.` : `Made ${copy.name}`);
 }
 function deleteTimeline(tl) {
   for (const k of ['photos', 'bands', 'events', 'tracks']) doc[k].filter(r => r.timeline === tl.id).forEach(r => remove(k, r.id));
