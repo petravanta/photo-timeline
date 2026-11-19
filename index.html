@@ -257,6 +257,7 @@ input[type=range]{accent-color:var(--accent);width:100%}
   <section class="panel stack" id="items" hidden></section>
   <p class="sr-only" id="live" aria-live="polite"></p>
 </main>
+<div data-version-footer></div>
 <div id="layer"></div>
 <div class="drop-overlay" id="dropOverlay" hidden><p id="dropText">Drop to add photos</p></div>
 <input type="file" id="photoIn" accept="image/*" multiple hidden>
@@ -722,10 +723,25 @@ async function driveUpload(meta, blob, fileId) {
   const r = await dfetch(`${DRIVE_UP}/files${fileId ? '/' + fileId : ''}?uploadType=multipart&fields=id`, { method: fileId ? 'PATCH' : 'POST', body });
   return (await r.json()).id;
 }
+// The app folder lives in petravanta/ next to the other apps' folders (general STANDARDS.md, "Where it lives").
+// A "Photo Timeline" folder made before that, in the root of My Drive, is moved in once, photos and all; ids stay the same.
 async function driveFolder() {
-  const [f] = await driveList(`appProperties has { key='pt' and value='folder' }`);
+  const [f] = await driveList(`appProperties has { key='pt' and value='folder' }`, 'id,parents');
+  const home = await driveHome();
+  if (f) {
+    if (!(f.parents || []).includes(home)) await dfetch(`/files/${f.id}?addParents=${home}` + ((f.parents || []).length ? `&removeParents=${f.parents.join(',')}` : '') + '&fields=id', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    return f.id;
+  }
+  const r = await dfetch('/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Photo Timeline', mimeType: 'application/vnd.google-apps.folder', parents: [home], appProperties: { pt: 'folder' } }) });
+  return (await r.json()).id;
+}
+// The shared petravanta folder: every app uses the same OAuth client, so they all see it whichever app made it
+async function driveHome() {
+  // Oldest first, like the other apps, so two racing apps settle on the same folder
+  const q = `name='petravanta' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false`;
+  const [f] = (await (await dfetch(`/files?q=${encodeURIComponent(q)}&orderBy=createdTime&fields=files(id)`)).json()).files || [];
   if (f) return f.id;
-  const r = await dfetch('/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Photo Timeline', mimeType: 'application/vnd.google-apps.folder', appProperties: { pt: 'folder' } }) });
+  const r = await dfetch('/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'petravanta', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] }) });
   return (await r.json()).id;
 }
 function driveShow(status) {
@@ -2659,6 +2675,7 @@ if (Drive.on) driveSync();   // the Drive copy may have changed on another devic
 </script>
 <script src="https://petravanta.github.io/general/shared/hub-link.js" defer></script>
 <script src="https://petravanta.github.io/general/shared/theme-switch.js" defer></script>
+<script src="https://petravanta.github.io/general/shared/version-footer.js" defer></script>
 <script>if('serviceWorker' in navigator&&/^(petravanta\.github\.io|localhost|127\.0\.0\.1)$/.test(location.hostname))navigator.serviceWorker.register('sw.js').catch(function(){})</script>
 </body>
 </html>
