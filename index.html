@@ -698,11 +698,50 @@ async function driveToken(prompt) {
   if (r.email) Drive.email = r.email;
   driveKeep();
 }
+// Google asks busy apps to back off: 429, a 403 with a rate-limit reason, or a 5xx is tried again up to 4 times,
+// 1, 2, 4 s apart plus a random spread, or what Retry-After asks (general STANDARDS.md, "When Google Drive says no")
 async function dfetch(url, opt = {}) {
-  const r = await fetch(url.startsWith('http') ? url : DRIVE_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + Drive.token } });
-  if (r.status === 401) { Drive.token = null; Drive.exp = 0; GoogleToken.forget(Drive.email); throw Object.assign(new Error('expired'), { signIn: true }); }
-  if (!r.ok) { const j = await r.json().catch(() => ({})); throw Object.assign(new Error(j.error?.message || 'HTTP ' + r.status), { status: r.status }); }
-  return r;
+  for (let n = 0; ; n++) {
+    let r;
+    try { r = await fetch(url.startsWith('http') ? url : DRIVE_API + url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + Drive.token } }); }
+    catch (e) { throw Object.assign(new Error('offline'), { offline: true }); }
+    if (r.status === 401) { Drive.token = null; Drive.exp = 0; GoogleToken.forget(Drive.email); throw Object.assign(new Error('expired'), { signIn: true }); }
+    if (r.ok) return r;
+    const j = (await r.json().catch(() => ({}))).error || {};
+    const e = Object.assign(new Error(j.message || 'HTTP ' + r.status), { status: r.status, reason: ((j.errors || [])[0] || {}).reason || j.status || '' }), k = driveKind(e);
+    if (n < 3 && (k === 'busy' || k === 'server')) {
+      const ra = Number(r.headers.get('Retry-After')), ms = ra > 0 ? Math.min(ra, 60) * 1000 : 2 ** n * 1000 + Math.random() * 1000;
+      Drive.problem = driveExplain(e, ms); driveShow(Drive.problem.text); await new Promise(f => setTimeout(f, ms)); continue;
+    }
+    throw e;
+  }
+}
+// What went wrong, in words a person can act on, ending with Google's status and reason. Drive.problem keeps the details:
+// {kind, text, status, reason, message, retrying, retryAt, at}, the same shape as general's shared/drive-store.js
+function driveKind(e) {
+  if (!e || e.signIn) return null;
+  if (e.offline || e instanceof TypeError) return 'offline';
+  const s = e.status, r = e.reason || '';
+  if (/storageQuotaExceeded/.test(r)) return 'full';
+  if (s === 429 || /rateLimitExceeded|quotaExceeded|dailyLimitExceeded|RESOURCE_EXHAUSTED/i.test(r)) return 'busy';
+  if (s === 403) return 'denied';
+  if (s === 404) return 'missing';
+  if (s >= 500) return 'server';
+  return 'http';
+}
+const DRIVE_TEXT = {
+  offline: 'Offline · changes sync to Drive when you’re back online',
+  busy: 'Google Drive is busy · trying again by itself',
+  server: 'Google Drive had a problem on its side · trying again by itself',
+  full: 'Your Google Drive is full · free up space and the app syncs again',
+  denied: 'Google Drive didn’t allow this · disconnect and connect Google Drive again, and tick the Drive box',
+  missing: 'Couldn’t find a file in Google Drive · trying again',
+  http: 'Google Drive didn’t accept the change · trying again'
+};
+function driveExplain(e, retryIn) {
+  const k = driveKind(e); if (!k) return null;
+  return { kind: k, status: e.status || 0, reason: e.reason || '', message: e.offline ? '' : e.message || '', retrying: retryIn > 0, retryAt: retryIn > 0 ? new Date(Date.now() + retryIn) : null, at: new Date(),
+    text: DRIVE_TEXT[k] + (e.status ? ` (${e.status}${e.reason ? ' ' + e.reason : ''})` : '') };
 }
 const dq = s => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 // Every file the app made that matches q, following pages
@@ -810,11 +849,18 @@ async function driveSync(prompt = null) {
     }
     const del = new Set(doc.deleted);
     for (const [pid, fid] of remote) if (del.has(pid)) await dfetch(`/files/${fid}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
-    Drive.lastSync = now(); driveKeep();
+    Drive.lastSync = now(); Drive.problem = null; Drive.retry = 0; driveKeep();
     driveShow('');
   } catch (e) {
     if (e.signIn) { Drive.needsSignIn = true; driveShow(''); }
-    else driveShow(e instanceof TypeError ? 'Couldn’t reach Google Drive. It will try again.' : `Google Drive said: ${e.message}`);
+    else {
+      // Sync again by itself, 30 s, then 1, 2, 4, up to 5 minutes apart. Offline waits for 'online'; a full Drive or a
+      // refused permission waits for the person.
+      const k = driveKind(e), again = k === 'busy' || k === 'server' || k === 'missing' || k === 'http';
+      if (again) { Drive.retry = Math.min((Drive.retry || 15000) * 2, 300000); clearTimeout(Drive.timer); Drive.timer = setTimeout(() => driveSync(), Drive.retry); }
+      Drive.problem = driveExplain(e, again ? Drive.retry : 0);
+      driveShow(Drive.problem.text);
+    }
   } finally {
     Drive.busy = false;
     if (Drive.again) { Drive.again = false; driveSoon(); }
@@ -832,16 +878,17 @@ async function driveConnect() {
   catch (e) { return toast(e && e.type === 'popup_closed' ? 'Google sign-in was closed.' : 'Couldn’t sign in to Google. Check that pop-ups are allowed for this site.', 5000); }
   Drive.on = true; Drive.pushed = ''; driveKeep();
   await driveSync('');
-  if (!Drive.needsSignIn && !/said|reach/.test(Drive.status)) toast('Synced with Google Drive');
+  if (!Drive.needsSignIn && !Drive.problem) toast('Synced with Google Drive');
 }
 function driveDisconnect() {
   // Forget the sign-in on this browser only: Google's permission stays for the other apps and devices
   GoogleToken.forget(Drive.email);
-  Object.assign(Drive, { on: false, token: null, email: '', lastSync: '', pushed: '', needsSignIn: false, status: '' });
+  Object.assign(Drive, { on: false, token: null, email: '', lastSync: '', pushed: '', needsSignIn: false, status: '', problem: null });
   driveKeep(); driveShow('');
 }
 $('#driveBtn').onclick = () => driveSync('');   // a tap, so Google may show its sign-in
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') driveSync(); });
+window.addEventListener('online', () => driveSync());
 // The sign-in lasts an hour. Renew it on any tap once it is close to running out, since only a tap may open Google's window;
 // for an account that already agreed, the window closes by itself
 document.addEventListener('click', e => {
